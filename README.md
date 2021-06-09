@@ -6,12 +6,12 @@ Robogo is a backend multitool for projects using [MongoDB](https://www.mongodb.c
 
 
 ## Table of contents
-* [Getting started](#install)
-* [Schemas](#schemas)
-* [Field Access](#fieldaccess)
-* [Working with files](#files)
-* [Services](#services)
-* [Routes:](#routes)
+* [Getting started](#installSection)
+* [Schemas](#schemasSection)
+* [Field Access](#fieldaccessSection)
+* [Working with files](#filesSection)
+* [Services](#servicesSection)
+* [Routes:](#routesSection)
   * [Create](#createRoutes)
   * [Read](#readRoutes)
   * [Update](#updateRoutes)
@@ -19,7 +19,7 @@ Robogo is a backend multitool for projects using [MongoDB](https://www.mongodb.c
   * [Service](#serviceRoutes)
   * [File](#fileRoutes)
   * [Special](#specialRoutes)
-* [Middlewares](#middleware)
+* [Middlewares](#middlewareSection)
 
 
 
@@ -32,7 +32,7 @@ Thank You in advance!
 
 
 <br></br>
-<a name="install"></a>
+<a name="installSection"></a>
 ## Getting started
 > The documentation will refer back to this section, so don't worry if you don't understand something now.
 
@@ -69,7 +69,7 @@ The constructor uses the following parameters:
 
 **\* Note**: Even if an image is already smaller then the size specified it will be compressed to take up less space. If null is given as value no resizing or compressing will be done.
 
-<a name="schemas"></a>
+<a name="schemasSection"></a>
 ## Schemas
 Robogo is a solid base for you to build upon automated processes. For this you can provide some additional information in your schemas, that you can use later. 
 
@@ -125,7 +125,7 @@ module.exports = mongoose.model('User', UserSchema) // Export the model so that 
 
 
 <br></br>
-<a name="fieldaccess"></a>
+<a name="fieldaccessSection"></a>
 ## Field access
 Most of the time we want to make differences between users in the sense of who can see or modify the data in the database. Robogo provides an easy to use system that makes it possible for us to **manage accesses on every field of every document**.
 
@@ -140,7 +140,7 @@ If someone is trying to delete a document with a field with greater minWriteAcce
 
 
 <br></br>
-<a name="files"></a>
+<a name="filesSection"></a>
 ## Working with files
 Robogo can help greatly with file handling. Files sent to its '/fileupload' path will be saved automatically into the folder given to the constructor as the 'FileDir' parameter. Images can be compressed and resized with no hassle, it can even create thumbnail images if needed.  These functionalities can be configured in the constructor of robogo. You can get more information on them in the [Getting started](#install) chapter. The [Routes - File](#fileRoutes) section describes the routes that can be used to create new or delete and access the uploaded files.
 
@@ -160,7 +160,7 @@ The RoboFile model has the following schema:
 
 
 <br></br>
-<a name="services"></a>
+<a name="servicesSection"></a>
 ## Services
 Services are just like normal express.js routes that are registered automatically by and can be reached through robogo. Every services functions can be reached with both GET and POST methods, depending on which robogo route was used when calling it.
 
@@ -205,7 +205,7 @@ module.exports = Services
 
 
 <br></br>
-<a name="routes"></a>
+<a name="routesSection"></a>
 ## Routes
 
 In this section you can find the description of the endpoints that are created by robogo. All of the routes are prefixed with the path that was used, when [the routes were registered in Express using the GenerateRoutes method](#install). So in this example '/api'.
@@ -232,7 +232,7 @@ An object that matches the given models schema. The whole req.body should be the
 #### /:model/find
 >Returns documents for the given model.
 * Method: GET
-* Returns: Array\<Objects\>
+* Returns: Array\<Object\>
 
 ```javascript
 // an example using the axios library
@@ -281,7 +281,7 @@ axios.get('/api/User/507f191e810c19729de860ea', {
 > Returns documents for the given model that are matching the given search term. This route uses the [Fuse.js](https://www.npmjs.com/package/fuse.js) library in the background. Searching in huge amount of keys and data can be slow and searching in date fields is not supported.
 
 * Method: GET
-* Returns: Array\<Objects\>
+* Returns: Array\<Object\>
 
 ```javascript
 // an example using the axios library
@@ -447,7 +447,7 @@ axios.get('/api/fields/User')
 
 
 <br></br>
-<a name="middleware"></a>
+<a name="middlewareSection"></a>
 ## Adding custom middlewares
 
 If needed, we can extend the functionalities of the default routes of robogo with middlewares. Middleware functions **have to return a Promise**. This Promise should be resolved when the middleware is done with its work and the route should continue running. Rejecting the Promise will stop the route from continuing and (if the 'ShowLogs' parameter of the constructor was set to true) the value given to the reject function will be written to the console. In this case **do not forget** to send a response from inside the middleware. Every middlewares 'this' context is the robogo instance it was registered in.
