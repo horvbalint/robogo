@@ -1,5 +1,5 @@
 
-# Robogo
+# robogo
 
 Robogo is a backend multitool for projects using [MongoDB](https://www.mongodb.com/), [Mongoose](https://www.npmjs.com/package/mongoose) and [Express](https://www.npmjs.com/package/express). Its aim is to reduce the amount of time needed to start, extend and maintain a project. Robogo started out as a CRUD operation helper, but soon evolved into a much more complex system with a lots of features on top of being a CRUD engine.
 
@@ -26,7 +26,8 @@ Robogo is a backend multitool for projects using [MongoDB](https://www.mongodb.c
 ## Disclaimer
 We take no responsibility for any demage done by this package.
 
-If you find anything that isn't working or not up to the documentation create a pull request over on [github](https://github.com/horvbalint/robogo/issues).
+If you find anything that isn't working or not up to the documentation, please open issue or a pull request over on [github](https://github.com/horvbalint/robogo/issues).
+
 Thank You in advance!
 
 
@@ -62,7 +63,6 @@ The constructor uses the following parameters:
 | MaxThumbnailSize   | Number  | If CreateThumbnail is true, it behaves the same way as MaxImageSize but for thumbnail images.                                                                                                                                             | 200                 |
 | MongooseConnection | Object  | Only needed if the mongoose connection was created using mongoose.connect().                                                                                                                    | require('mongoose') |
 | CheckAccess        | Boolean | Indicates whether robogo should use its access features. Disabling it will speed operations up when handling huge documents.                                                                                                          | true                |
-| MaxHeaderDepth     | Number  | The maximum depth of tableheaders and schemakeys. Starts at 0.                                                                                                                                                                            | 2                   |
 | ShowLogs           | Boolean | Indicates whether robogo should log basic information to the console.                                                                                                                                                                 | true                |
 | ShowWarnings       | Boolean | Indicates whether robogo should log warning messages to the console.                                                                                                                                                                  | true                |
 | ShowErrors         | Boolean | Indicates whether robogo should log error messages to the console.                                                                                                                                                                    | true                |
@@ -77,12 +77,12 @@ Robogo is a solid base for you to build upon automated processes. For this you c
 
 | Field   | Description   | Default |
 |:-|:-:|:-:|
-| name           | Can be used to display as an input label or table column name. e.g.: {type String, name: “Username”}                  |         |
-| description    | Can be used to display as a hover tooltip text. e.g.: {type String, description: “Unique identifier of the user”} |         |
+| name           | Can be used to display as an input label or table column name. e.g.: {type String, name: “Username”}                     |         |
+| description    | Can be used to display as a hover tooltip text. e.g.: {type String, description: “Unique identifier of the user”}        |         |
 | minWriteAccess | A positive number. If given, one needs an accesslevel higher or equal to create, update or delete this field             | 0       |
 | minReadAccess  | A positive number. If given, one needs an accesslevel higher or equal to read this field                                 | 0       |
-| marked        | Simply marks this field, that you can interpret like however you want it                                                 | false   |
-| hidden         | Fields marked as hidden will not be included in table headers when queried                                               | false   |
+| marked         | Simply marks this field, that you can interpret later like however you want it                                                 | false   |
+| hidden         | Fields marked as hidden will not be included in the result of the '/fields/:model' route                                 | false   |
 
 An example schema can look like this:
 
@@ -403,13 +403,25 @@ axios.delete(`/api/filedelete/:id`)
 ### Special routes
 
 ####  /schema/:model
->Special route that returns everything there is to know about the given models schema  (its fields and their properties).
+>Special route that returns everything there is to know about the given model's schema  (its fields and their properties).
 * Method: GET
 * Returns: Object
 
 ```javascript
 // an example using the axios library
 axios.get('/api/schema/User')
+```
+
+
+<br></br>
+#### /fields/:model
+>  Returns a tree-like structure of the fields and their properties for the given model. Similar to the '/schema/:model' route, but only returns a reduced set of properties and leaves out fields that were marked as "hidden" in the schema. The returned properties are: name, key, description, type, isArray, marked.
+* Methods: GET
+* Returns: Array<Object\>
+
+```javascript
+// an example using the axios library
+axios.get('/api/fields/User')
 ```
 
 
@@ -433,17 +445,6 @@ Params:
 |:-|:-:|:-:|:-:|
 | filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {Chandler: {$in: friends}} |
 
-
-<br></br>
-#### /fields/:model
->  Returns a tree-like structure of the fields and their properties for the given model. Similar to the '/schema/:model' route, but only returns a reduced set of properties and leaves out fields that were marked as "hidden" in the schema. The returned properties are: name, key, description, type, isArray, marked.
-* Methods: GET
-* Returns: Array<Object\>
-
-```javascript
-// an example using the axios library
-axios.get('/api/fields/User')
-```
 
 
 <br></br>
@@ -533,7 +534,7 @@ try {
 
 
 ## Contributing
-Every contribution is more then welcomed. If you have an idea or made some changes to the code, please open a pull request at the package's  [github page](https://github.com/horvbalint/robogo/issues).  
+Every contribution is more then welcomed. If you have an idea or made some changes to the code, please open an issue or pull request at the package's [github page](https://github.com/horvbalint/robogo/issues).  
 
 ## Authors
 * Horváth Bálint

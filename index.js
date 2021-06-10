@@ -19,7 +19,6 @@ class Robogo {
       CreateThumbnail = false,
       MaxThumbnailSize = 200,
       CheckAccess = true,
-      MaxHeaderDepth = 2,
       ShowLogs = true,
       ShowWarnings = true,
       ShowErrors = true,
@@ -42,7 +41,6 @@ class Robogo {
     this.CreateThumbnail      = CreateThumbnail
     this.MaxThumbnailSize     = MaxThumbnailSize
     this.CheckAccess          = CheckAccess
-    this.MaxHeaderDepth       = MaxHeaderDepth
     this.ShowLogs             = ShowLogs
     this.ShowWarnings         = ShowWarnings
     this.ShowErrors           = ShowErrors
@@ -186,9 +184,9 @@ class Robogo {
   /**
    * Returns the field paths of a model that are safe to be used with fuse.js.
    * @param {String} modelName 
-   * @param {Number} maxDepth 
+   * @param {Number} [maxDepth=2] 
    */
-  GetSchemaKeys(modelName, maxDepth = this.MaxHeaderDepth) {
+  GetSchemaKeys(modelName, maxDepth = 2) {
     let keys = []
 
     for(let field of this.DecycledSchemas[modelName])
@@ -411,33 +409,34 @@ class Robogo {
 
   /**
    * Recursively creates field descriptors that only have those information, which can be useful on the frontend
-   * @param {(String|Array)} schema - Model name, or robogo schema descriptor 
+   * @param {(String|Array)} schema - Model name or robogo schema descriptor 
+   * @param {Number} [maxDepth=Infinity] - Maximum reference depth
    * @param {Number} [depth=0] - This parameter should be leaved empty
    */
-  GetHeaders(schema, depth = 0) {
+  GetFields(schema, maxDepth = Infinity, depth = 0) {
     if(typeof schema == 'string') schema = this.Schemas[this.BaseDBString][schema] // if string was given, we get the schema descriptor
-    let headers = []
+    let fields = []
 
     for(let field of schema) {
-      if(field.hidden) continue // fields marked as hidden should not be visible as (table)headers
-      let hField = {}
+      if(field.hidden) continue // fields marked as hidden should not be included in fields
+      let fieldDescriptor = {}
 
       for(let key of ['name', 'key', 'description', 'type', 'isArray', 'marked']) // we copy theese fields as they are useful on the frontend
-        hField[key] = field[key]
+        fieldDescriptor[key] = field[key]
 
-      // if current depth is lower then max, we collect the headers of the subfields
-      if(field.subfields && depth < this.MaxHeaderDepth)
-        hField.subfields = this.GetHeaders(field.subfields, field.ref ? depth+1 : depth)
+      // if current depth is lower then max, we collect the descriptors of the subfields
+      if(field.subfields && depth < maxDepth)
+        fieldDescriptor.subfields = this.GetFields(field.subfields, maxDepth, field.ref ? depth+1 : depth)
 
-      headers.push(hField)
+      fields.push(fieldDescriptor)
     }
 
-    return headers
+    return fields
   }
 
   /**
    * Helper function, that is used when an image was uploaded.
-   * It will resize the image if needed to the specified size.
+   * It will resize the image to the specified size if needed.
    * It will create a RoboFile document for the image, with the properties of the image.
    * It will also create a thumbnail of the image if needed.
    * @param {Object} req 
@@ -613,7 +612,7 @@ class Robogo {
         return res.status(500).send('MISSING MODEL')
       }
 
-      res.send(this.GetHeaders(req.params.model))
+      res.send(this.GetFields(req.params.model))
     })
 
     Router.get( '/getter/:service/:fun', (req, res) => {
