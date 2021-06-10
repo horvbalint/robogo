@@ -691,8 +691,7 @@ class Robogo {
       this.CRUDRoute(req, res, mainPart, responsePart, 'R')
     })
 
-    // TODO: Add to documentation
-    Router.get( '/search/:model', async (req, res) => {
+    Router.get( '/:model/search', (req, res) => {
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
           .find( JSON.parse(req.query.filter || '{}'), req.query.projection )

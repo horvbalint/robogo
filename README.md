@@ -222,7 +222,7 @@ It is recommended to use this package's frontend helper [robolt](TODO), that wil
 axios.post('/api/User', UserData)
 ```
 ##### Params:
-An object that matches the given models schema. The whole req.body should be the object.
+An object that matches the given model's schema. The whole req.body should be the object.
 
 
 <br></br>
@@ -252,7 +252,7 @@ axios.get('/api/User/find', {
 |:-|:-:|:-:|:-:|
 | filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {Chandler: {$in: friends}} |
 | projection | Array\<String\> | Fields to include in results. Uses MongoDB [projection](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.html). | ['username', 'friends'] |
-| sort | Object | [Mongodb sort](https://docs.mongodb.com/manual/reference/method/cursor.sort/index.html) | { age : 1 } |
+| sort | Object | [Mongodb sort](https://docs.mongodb.com/manual/reference/method/cursor.sort/index.html) | {age : 1} |
 | skip | Number | The number of documents to skip in the results set. | 10 |
 | limit | Number | The number of documents to include in the results set. | 5 |
 
@@ -277,7 +277,7 @@ axios.get('/api/User/507f191e810c19729de860ea', {
 
 
 <br></br>
-#### /search/:model
+#### /:model/search
 > Returns documents for the given model that are matching the given search term. This route uses the [Fuse.js](https://www.npmjs.com/package/fuse.js) library in the background. Searching in huge amount of keys and data can be slow and searching in date fields is not supported.
 
 * Method: GET
@@ -369,11 +369,11 @@ axios.post('/api/runner/user/clearFriends')
 <br></br>
 <a name="fileRoutes"></a>
 ### File routes
-The following routes are only available, if the FileDir parameter was provided in the constructor.
+The following routes are only available, if the 'FileDir' parameter was provided in the [constructor](#installSection).
 
 #### /fileupload
 >Uploads a given file, and generates a unique name for it. We must send the file as multipart/form-data.
-If the file is an image and the CreateThumbnail option was set to true in the constructor it will generate a thumbnail for it. Thumbnail images will have names like 'fileUniqueName_thumbnail.jpg'.
+If the file is an image and the 'CreateThumbnail' option was set to true in the [constructor](#installSection) it will generate a thumbnail for it. Thumbnail images will have names like 'fileUniqueName_thumbnail.jpg'.
 * Method: POST
 * Returns: Object (RoboFile document)
 
@@ -383,7 +383,7 @@ let formData = new FormData()
 formData.append('file', UserAvatar) // the field name must be 'file'
 
 axios.post(`/api/fileupload`, formData, {
-  headers: { 'Content-Type': 'multipart/form-data' }
+  headers: {'Content-Type': 'multipart/form-data'}
 })
 ```
 
@@ -451,7 +451,7 @@ Params:
 <a name="middlewareSection"></a>
 ## Adding custom middlewares
 
-If needed, we can extend the functionalities of the default routes of robogo with middlewares. Middleware functions **have to return a Promise**. This Promise should be resolved when the middleware is done with its work and the route should continue running. Rejecting the Promise will stop the route from continuing and (if the 'ShowLogs' parameter of the constructor was set to true) the value given to the reject function will be written to the console. In this case **do not forget** to send a response from inside the middleware. Every middleware's 'this' context is the robogo instance it was registered in.
+If needed, we can extend the functionalities of the default routes of robogo with middlewares. Middleware functions **have to return a Promise**. This Promise should be resolved when the middleware is done with its work and the route should continue running. Rejecting the Promise will stop the route from continuing and (if the 'ShowLogs' parameter of the [constructor](#installSection) was set to true) the value given to the reject function will be written to the console. In this case **do not forget** to send a response from inside the middleware. Every middleware's 'this' context is the robogo instance it was registered in.
 
 There are four categories of routes that can have middlewares:
   * **C**(reat)
@@ -459,7 +459,7 @@ There are four categories of routes that can have middlewares:
   * **U**(pdate)
   * **D**(elete)
 
-Each route-category can have a 'before' and an 'after' middleware.
+Each route-category can have a single 'before' and an 'after' middleware.
 
 <br></br>
 ### 'before' middlewares
