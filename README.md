@@ -101,21 +101,18 @@ const UserSchema = new mongoose.Schema({
     minReadAccess: 0, // But don't need it to read it
     marked: true
   },
+  avatar: {
+    type: ObjectId,
+    ref: "RoboFile", // File refrences will be stored in this special schema
+    autopopulate: true, // Not required, but suggested to be used for file fields
+    name: "Avatar"
+  },
   friends: {
     type: [new mongoose.Schema({
-      name: { type: String, name: "A friends name" }
+      name: {type: String, name: "A friends name"}
     })],
     name: "List of the users friends",
     hidden: true
-  },
-  files: {
-    type: [{
-	    type: ObjectId,
-	    ref: "RoboFile", // File refrences will be stored in this special schema
-	    autopopulate: true, // Not required, but suggested to be used for file fields
-	    name: "File"
-	}],
-	name: "Files",
   }
 }, { selectPopulatedPaths: false }) // We usually need this if using mongoose-autopopulate otherwise fields will always be present when queried regardless of the projection 
 
@@ -154,7 +151,7 @@ The RoboFile model has the following schema:
   size: { type: Number,  name: "File size", description: "Size of the saved file", required: true },
   extension: { type: String,  name: "File extension", description: "Extension of the saved file", required: true },
   isImage: { type: Boolean, name: "Is image?", description: "Indicates whether the saved file is an image or not", default: false },
-  thumbnailPath: { type: String,  name: "Thumbnail path", description: "Path of the saved thumbnail",                         default: null },
+  thumbnailPath: { type: String,  name: "Thumbnail path", description: "Path of the saved thumbnail", default: null },
 }
 ```
 
@@ -162,9 +159,9 @@ The RoboFile model has the following schema:
 <br></br>
 <a name="servicesSection"></a>
 ## Services
-Services are just like normal express.js routes that are registered automatically by and can be reached through robogo. Every services functions can be reached with both GET and POST methods, depending on which robogo route was used when calling it.
+Services are just like normal express.js routes that are registered automatically by and can be reached through robogo. Every service's functions can be reached with both GET and POST methods, depending on which robogo route was used when calling it.
 
-Services are created by creating separate .js files that are containing one or more service functions.  These files should export an object containing the service functions of the service. Service files should then be put in a single folder and this folder should be registered in robogo by giving the path of it to the constructors 'ServiceDir' parameter.
+Services are created by creating separate .js files that are containing one or more service functions.  These files should export an object containing the service functions of the service. Service files should then be put in a single folder and this folder should be registered in robogo by giving the path of it to the constructor as the 'ServiceDir' parameter.
 
 Service functions are identified and called by providing their service name (name of the .js file they are in) and their function name. All service functions must return a Promise whose resolved value will be sent back as a response to the client. Rejecting the Promise will send the rejected error back to the client, with a status code of 500. Service functions can use three parameters, that are in order:
   * **req**: Request object (from Express.js)
@@ -189,13 +186,13 @@ const Services = {
   },
   
   // service function created using Promise
-  clearFiles: (req, res, data) => {
+  removeAvatar: (req, res, data) => {
     return new Promise((resolve, reject) => {
-	  let userId = data.id
-	  
-	  deleteFilesOfUser(userId)
-	   .then( () => resolve('Success') )
-	   .catch( () => reject('Failed')
+      let userId = data.id
+      
+      deleteAvatarOfUser(userId)
+        .then( () => resolve('Success') )
+        .catch( () => reject('Failed')
     })
   },
 }
@@ -342,7 +339,7 @@ axios.delete('/api/User/507f191e810c19729de860ea')
 <a name="serviceRoutes"></a>
 ### Service routes
 
-There are two types of services getters and runners. The difference between the two is just the HTTP-method they are using. Runners use POST so you can send data more easily and not get the results cached. Getters use GET so you can get the results cached if needed.
+There are two types of services: getters and runners. The difference between the two is just the HTTP-method they are using. Runners use POST so you can send data more easily and not get the results cached. Getters use GET so you can get the results cached if needed.
 
 #### /getter/:service/:function
 >Runs a function in services.
@@ -451,7 +448,7 @@ Params:
 <a name="middlewareSection"></a>
 ## Adding custom middlewares
 
-If needed, we can extend the functionalities of the default routes of robogo with middlewares. Middleware functions **have to return a Promise**. This Promise should be resolved when the middleware is done with its work and the route should continue running. Rejecting the Promise will stop the route from continuing and (if the 'ShowLogs' parameter of the constructor was set to true) the value given to the reject function will be written to the console. In this case **do not forget** to send a response from inside the middleware. Every middlewares 'this' context is the robogo instance it was registered in.
+If needed, we can extend the functionalities of the default routes of robogo with middlewares. Middleware functions **have to return a Promise**. This Promise should be resolved when the middleware is done with its work and the route should continue running. Rejecting the Promise will stop the route from continuing and (if the 'ShowLogs' parameter of the constructor was set to true) the value given to the reject function will be written to the console. In this case **do not forget** to send a response from inside the middleware. Every middleware's 'this' context is the robogo instance it was registered in.
 
 There are four categories of routes that can have middlewares:
   * **C**(reat)
