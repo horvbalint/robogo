@@ -3,6 +3,7 @@
 
 Robogo is a backend multitool for projects using [MongoDB](https://www.mongodb.com/), [Mongoose](https://www.npmjs.com/package/mongoose) and [Express](https://www.npmjs.com/package/express). Its aim is to reduce the amount of time needed to start, extend and maintain a project. Robogo started out as a CRUD operation helper, but soon evolved into a much more complex system with a lots of features on top of being a CRUD engine.
 
+It is recommended to use this package's frontend helper [robolt](TODO) to make things simpler on the frontend.
 
 
 ## Table of contents
@@ -126,7 +127,7 @@ module.exports = mongoose.model('User', UserSchema) // Export the model so that 
 ## Field access
 Most of the time we want to make differences between users in the sense of who can see or modify the data in the database. Robogo provides an easy to use system that makes it possible for us to **manage accesses on every field of every document**.
 
-For this to work an express.js middleware has to add an access level number to the req object (as **req.accesslevel**) of every request. If this is not present the accesslevel of the request will be set to 0 by default. We must also include some special attributes for the fields of our schemas, as described in the [Schemas](#schemas) chapter. 
+For this to work an express.js middleware has to add an access level number to the req object (as **req.accesslevel**) of every request. If this is not present the accesslevel of the request will be set to 0 by default. We must also include some special attributes for the fields of our schemas, as described in the [Schemas](#schemasSection) chapter. 
 
 [Read routes](#readRoutes) will scan trough the results of the database query and remove every field that has a higher **minReadAccess** then the provided accesslevel in the req object. So if a field requires a minReadAccess of 100 then a user with an accesslevel of 50 will get the field removed from the results. 
 
@@ -139,9 +140,9 @@ If someone is trying to delete a document with a field with greater minWriteAcce
 <br></br>
 <a name="filesSection"></a>
 ## Working with files
-Robogo can help greatly with file handling. Files sent to its '/fileupload' path will be saved automatically into the folder given to the constructor as the 'FileDir' parameter. Images can be compressed and resized with no hassle, it can even create thumbnail images if needed.  These functionalities can be configured in the constructor of robogo. You can get more information on them in the [Getting started](#install) chapter. The [Routes - File](#fileRoutes) section describes the routes that can be used to create new or delete and access the uploaded files.
+Robogo can help greatly with file handling. Files sent to its '/fileupload' path will be saved automatically into the folder given to the constructor as the 'FileDir' parameter. Images can be compressed and resized with no hassle, it can even create thumbnail images if needed.  These functionalities can be configured in the constructor of robogo. You can get more information on them in the [Getting started](#installSection) chapter. The [Routes - File](#fileRoutes) section describes the routes that can be used to create new or delete and access the uploaded files.
 
-Robogo  creates a special **RoboFile** model to store information about the files it handles.  This special model can not be handled by robogos default routes. Every time a file is uploaded an instance of this model is saved into the database containing the properties of the file. You can reference this document in your documents like in the example of the [Schemas](#schemas) chapter.
+Robogo  creates a special **RoboFile** model to store information about the files it handles.  This special model can not be handled by robogos default routes. Every time a file is uploaded an instance of this model is saved into the database containing the properties of the file. You can reference this document in your documents like in the example of the [Schemas](#schemasSection) chapter.
 
 The RoboFile model has the following schema:
 ```js
@@ -205,7 +206,9 @@ module.exports = Services
 <a name="routesSection"></a>
 ## Routes
 
-In this section you can find the description of the endpoints that are created by robogo. All of the routes are prefixed with the path that was used, when [the routes were registered in Express using the GenerateRoutes method](#install). So in this example '/api'.
+In this section you can find the description of the endpoints that are created by robogo. All of the routes are prefixed with the path that was used, when [the routes were registered in Express using the GenerateRoutes method](#installSection). So in this example '/api'.
+
+It is recommended to use this package's frontend helper [robolt](TODO), that will hide the complexity of the routes.
 
 <a name="createRoutes"></a>
 ### Create routes
@@ -248,7 +251,7 @@ axios.get('/api/User/find', {
 | key | type | description | example |
 |:-|:-:|:-:|:-:|
 | filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {Chandler: {$in: friends}} |
-| projection | Array\<String\> | Fields to include in results. Uses mongodb [projection](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.html). | ['username', 'friends'] |
+| projection | Array\<String\> | Fields to include in results. Uses MongoDB [projection](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.html). | ['username', 'friends'] |
 | sort | Object | [Mongodb sort](https://docs.mongodb.com/manual/reference/method/cursor.sort/index.html) | { age : 1 } |
 | skip | Number | The number of documents to skip in the results set. | 10 |
 | limit | Number | The number of documents to include in the results set. | 5 |
@@ -297,7 +300,7 @@ axios.get('/search/User', {
 | key | type | description | example |
 |:-|:-:|:-:|:-:|
 | filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {Chandler: {$in: friends}} |
-| projection | Array\<String\> | Fields to include in results. Uses mongodb [projection](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.html). | ['username', 'friends'] |
+| projection | Array\<String\> | Fields to include in results. Uses MongoDB [projection](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.html). | ['username', 'friends'] |
 | threshold | Number | [Fuse.js](https://www.npmjs.com/package/fuse.js) threshold, defaults to 0.4 | 0.6 |
 | keys | Array\<String\> | Keys of the document that are searched in. If no keys are provided all keys of the document will be used. | ['username'] |
 | term | String | Search term that is searched for | 'search term' |
