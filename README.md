@@ -229,14 +229,14 @@ An object that matches the given model's schema. The whole req.body should be th
 <a name="readRoutes"></a>
 ### Read routes
 
-#### /find/:model
+#### /read/:model
 >Returns documents for the given model.
 * Method: GET
 * Returns: Array\<Object\>
 
 ```javascript
 // an example using the axios library
-axios.get('/api/find/User', {
+axios.get('/api/read/User', {
   params: {
 	  filter: {Chandler: {$in: friends}},
 	  projection: ['username', 'friends'],

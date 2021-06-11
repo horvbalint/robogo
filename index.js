@@ -597,7 +597,7 @@ class Robogo {
 
     // READ routes
     // these routes will use "lean" so that results are not immutable
-    Router.get( '/find/:model', (req, res) => {
+    Router.get( '/read/:model', (req, res) => {
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
           .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
