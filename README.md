@@ -291,6 +291,7 @@ axios.get('/search/User', {
     projection: ['username', 'friends'],
     threshold: 0.4,
     keys: ['username'],
+    // depth: 2,
     term: 'search term',
   }
 })
@@ -302,7 +303,8 @@ axios.get('/search/User', {
 | filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {Chandler: {$in: friends}} |
 | projection | Array\<String\> | Fields to include in results. Uses MongoDB [projection](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.html). | ['username', 'friends'] |
 | threshold | Number | [Fuse.js](https://www.npmjs.com/package/fuse.js) threshold, defaults to 0.4 | 0.6 |
-| keys | Array\<String\> | Keys of the document that are searched in. If no keys are provided all keys of the document will be used. | ['username'] |
+| keys | Array\<String\> | Keys of the document that are searched in. If no keys are provided keys will be automatically picked from the schema | ['username'] |
+| depth | Number | If no keys are provided, we can limit the depth of the keys to be picked from the schema, defaults to Infinity | 2 |
 | term | String | Search term that is searched for | 'search term' |
 
 
@@ -444,6 +446,27 @@ Params:
 | key | type | description | example |
 |:-|:-:|:-:|:-:|
 | filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {Chandler: {$in: friends}} |
+
+
+<br></br>
+#### /searchkeys/:model
+> Returns the keys of a model's schema that are compatible with [Fuse.js](https://www.npmjs.com/package/fuse.js) and as such can be passed to the '/:model/search' route as keys.
+* Method: GET
+* Returns: Array\<String\>
+
+```javascript
+// an example using the axios library
+axios.get('/api/searchkeys/User', {
+  params: {
+    depth: 2,
+  }
+})
+```
+Params:
+
+| key | type | description | example |
+|:-|:-:|:-:|:-:|
+| depth | Number | Limits the depth of the keys to be picked from the schema, defaults to Infinity | 2 |
 
 
 

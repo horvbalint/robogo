@@ -184,13 +184,13 @@ class Robogo {
   /**
    * Returns the field paths of a model that are safe to be used with fuse.js.
    * @param {String} modelName 
-   * @param {Number} [maxDepth=2] 
+   * @param {Number} [maxDepth=Infinity] 
    */
-  GetSchemaKeys(modelName, maxDepth = 2) {
+  GetSearchKeys(modelName, maxDepth = Infinity) {
     let keys = []
 
     for(let field of this.DecycledSchemas[modelName])
-      this.GenerateSchemaKeys(field, keys, maxDepth)
+      this.GenerateSearchKeys(field, keys, maxDepth)
 
     let keys
   }
@@ -199,11 +199,11 @@ class Robogo {
    * Recursively collects the field paths of a field and its subfields that are safe to be used with fuse.js.
    * @param {Object} field - A robogo field descriptor
    * @param {Array} keys - Keys will be collected in this array
-   * @param {*} maxDepth
+   * @param {Number} maxDepth
    * @param {*} [prefix] - This parameter should be leaved empty
    * @param {*} [depth] - This parameter should be leaved empty
    */
-  GenerateSchemaKeys(field, keys, maxDepth, prefix = '', depth = 0) {
+  GenerateSearchKeys(field, keys, maxDepth, prefix = '', depth = 0) {
     if(depth > maxDepth) return
 
     if(!['Object', 'Date'].some(t => field.type == t) && !field.subfields) // fuse.js can not handle values that are not strings or numbers, so we don't collect those keys.
@@ -211,7 +211,7 @@ class Robogo {
     
     if(field.subfields)
       for(let f of field.subfields)
-        this.GenerateSchemaKeys(f, keys, maxDepth, `${prefix}${field.key}.`, depth+1)
+        this.GenerateSearchKeys(f, keys, maxDepth, `${prefix}${field.key}.`, depth+1)
   }
 
   /**
@@ -582,14 +582,13 @@ class Robogo {
       res.send(this.DecycledSchemas[req.params.model])
     })
 
-    // TODO: Re-think and document this route
-    Router.post( '/schemakeys/:model', (req, res) => {
+    Router.get( '/searchkeys/:model', (req, res) => {
       if(!this.Schemas[this.BaseDBString][req.params.model]) {
         this.LogMissingModel(req.params.model)
         return res.status(500).send('MISSING MODEL')
       }
 
-      res.send(this.GetSchemaKeys(req.params.model, req.body.depth))
+      res.send(this.GetSearchKeys(req.params.model, req.query.depth))
     })
 
     Router.get( '/count/:model', (req, res) => {
@@ -704,7 +703,7 @@ class Robogo {
         
         if(!req.query.threshold) req.query.threshold = 0.4
         if(!req.query.term) return res.send(results)
-        if(!req.query.keys || req.query.keys.length == 0) req.query.keys = this.GetSchemaKeys(req.params.model, req.query.depth) // if keys were not given, we search in all keys
+        if(!req.query.keys || req.query.keys.length == 0) req.query.keys = this.GetSearchKeys(req.params.model, req.query.depth) // if keys were not given, we search in all keys
   
         const fuse = new Fuse(results, {
           includeScore: false,
