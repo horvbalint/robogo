@@ -182,7 +182,7 @@ const Services = {
       deleteFriendsOfUser(userId)
       return 'Success'
     } catch(err) {
-	  throw 'Failed'
+      throw 'Failed'
     }
   },
   
@@ -213,13 +213,13 @@ It is recommended to use this package's frontend helper [robolt](TODO), that wil
 <a name="createRoutes"></a>
 ### Create routes
 
-#### /:model
+#### /create/:model
 >Creates a new document.
 * Method: POST
 * Returns: Object (MongoDB document)
 ```javascript
 // an example using the axios library
-axios.post('/api/User', UserData)
+axios.post('/api/create/User', UserData)
 ```
 ##### Params:
 An object that matches the given model's schema. The whole req.body should be the object.
@@ -229,14 +229,14 @@ An object that matches the given model's schema. The whole req.body should be th
 <a name="readRoutes"></a>
 ### Read routes
 
-#### /:model/find
+#### /find/:model
 >Returns documents for the given model.
 * Method: GET
 * Returns: Array\<Object\>
 
 ```javascript
 // an example using the axios library
-axios.get('/api/User/find', {
+axios.get('/api/find/User', {
   params: {
 	  filter: {Chandler: {$in: friends}},
 	  projection: ['username', 'friends'],
@@ -258,13 +258,14 @@ axios.get('/api/User/find', {
 
 
 <br></br>
-#### /:model/:id
+#### /get/:model/:id
 > Returns one document for the given model that matches the given id.
 * Method: GET
 * Returns: Object
+
 ```javascript
 // an example using the axios library
-axios.get('/api/User/507f191e810c19729de860ea', {
+axios.get('/api/get/User/507f191e810c19729de860ea', {
   params: {
 	  projection: ['username', 'friends']
   }
@@ -277,7 +278,7 @@ axios.get('/api/User/507f191e810c19729de860ea', {
 
 
 <br></br>
-#### /:model/search
+#### /search/:model
 > Returns documents for the given model that are matching the given search term. This route uses the [Fuse.js](https://www.npmjs.com/package/fuse.js) library in the background. Searching in huge amount of keys and data can be slow and searching in date fields is not supported.
 
 * Method: GET
@@ -285,7 +286,7 @@ axios.get('/api/User/507f191e810c19729de860ea', {
 
 ```javascript
 // an example using the axios library
-axios.get('/search/User', {
+axios.get('/api/search/User', {
   params: {
     filter: {Chandler: {$in: friends}},
     projection: ['username', 'friends'],
@@ -312,14 +313,14 @@ axios.get('/search/User', {
 <a name="updateRoutes"></a>
 ### Update routes
 
-#### /:model
+#### /update/:model
 >Updates a document matched by its _id field.
 * Method: PATCH
 * Returns: [WriteResults](https://docs.mongodb.com/manual/reference/method/db.collection.update/#std-label-writeresults-update)
 
 ```javascript
 // an example using the axios library
-axios.patch('/api/User', UpdatedUser)
+axios.patch('/api/update/User', UpdatedUser)
 ```
 ##### Params:
 The whole body should be an object with an _id field containing the ObjectId of the document we want to update and the fields we want to change with their new values.
@@ -329,14 +330,14 @@ The whole body should be an object with an _id field containing the ObjectId of 
 <a name="deleteRoutes"></a>
 ### Delete routes
 
-#### /:model/:id
+#### /delete/:model/:id
 >Deletes the document of the given model matched by the given id.
 * Method: DELETE
 * Returns: [WriteResults](https://docs.mongodb.com/manual/reference/method/db.collection.update/#std-label-writeresults-update)
 
 ```javascript
 // an example using the axios library
-axios.delete('/api/User/507f191e810c19729de860ea')
+axios.delete('/api/delete/User/507f191e810c19729de860ea')
 ```
 
 
@@ -346,17 +347,6 @@ axios.delete('/api/User/507f191e810c19729de860ea')
 
 There are two types of services: getters and runners. The difference between the two is just the HTTP-method they are using. Runners use POST so you can send data more easily and not get the results cached. Getters use GET so you can get the results cached if needed.
 
-#### /getter/:service/:function
->Runs a function in services.
-* Method: GET
-* Returns: Any
-
-```javascript
-// an example using the axios library
-axios.get('/api/getter/user/clearFriends')
-```
-
-<br></br>
 #### /runner/:service/:function
 >Runs a function in services.
 * Method: POST
@@ -365,6 +355,17 @@ axios.get('/api/getter/user/clearFriends')
 ```javascript
 // an example using the axios library
 axios.post('/api/runner/user/clearFriends')
+```
+
+<br></br>
+#### /getter/:service/:function
+>Runs a function in services.
+* Method: GET
+* Returns: Any
+
+```javascript
+// an example using the axios library
+axios.get('/api/getter/user/clearFriends')
 ```
 
 
@@ -437,7 +438,7 @@ axios.get('/api/fields/User')
 // an example using the axios library
 axios.get('/api/count/User', {
   params: {
-	filter: {Chandler: {$in: friends}},
+    filter: {Chandler: {$in: friends}},
   }
 })
 ```

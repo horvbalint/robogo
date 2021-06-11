@@ -573,104 +573,31 @@ class Robogo {
    * Generates all the routes of robogo and returns the express router.
    */
   GenerateRoutes() {
-    Router.get( '/schema/:model', (req, res) => {
-      if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model)
-        return res.status(500).send('MISSING MODEL')
+    // CREATE routes
+    Router.post( '/create/:model', (req, res) => {
+      function mainPart(req, res) {
+        if(this.CheckAccess)
+          this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], req.body, req.accesslevel, 'minWriteAccess')
+  
+        const Model = this.MongooseConnection.model(req.params.model)
+        const ModelInstance = new Model(req.body)
+        return ModelInstance.save()
       }
 
-      res.send(this.DecycledSchemas[req.params.model])
-    })
-
-    Router.get( '/searchkeys/:model', (req, res) => {
-      if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model)
-        return res.status(500).send('MISSING MODEL')
+      async function responsePart(req, res, result) {
+        if(this.CheckAccess)
+          this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], result, req.accesslevel)
+  
+        res.send(result)
       }
 
-      res.send(this.GetSearchKeys(req.params.model, req.query.depth))
+      this.CRUDRoute(req, res, mainPart, responsePart, 'C')
     })
+    // ----------------
 
-    Router.get( '/count/:model', (req, res) => {
-      if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model)
-        return res.status(500).send('MISSING MODEL')
-      }
-
-      if(!req.query.filter) req.query.filter = '{}'
-
-      this.MongooseConnection.model(req.params.model).countDocuments(JSON.parse(req.query.filter), (err, count) => {
-        if(err) res.status(500).send(err)
-        else res.send({count})
-      })
-    })
-
-    Router.get( '/fields/:model', (req, res) => {
-      if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model)
-        return res.status(500).send('MISSING MODEL')
-      }
-
-      res.send(this.GetFields(req.params.model))
-    })
-
-    Router.get( '/getter/:service/:fun', (req, res) => {
-      this.ServiceRoute(req, res, 'query')
-    })
-
-    Router.post( '/runner/:service/:fun', (req, res) => {
-      this.ServiceRoute(req, res, 'body')
-    })
-
-    if(this.FileDir) {
-      Router.use( `${this.ServeStaticPath}`, express.static(path.resolve(__dirname, this.FileDir)) )
-      Router.use( `${this.ServeStaticPath}`, (req, res) => res.status(404).send('NOT FOUND') ) // If a file is not found in FileDir, send back 404 NOT FOUND
-
-      // 
-      Router.post( "/fileupload", this.upload.single('file'), (req, res) => {
-        if(req.file.mimetype.startsWith('image')) return this.handleImageUpload(req, res)
-
-        let multerPath    = req.file.path
-        let extension     = req.file.originalname.split('.').pop()
-        let filePath      = `${req.file.filename}.${extension}` // the file will be saved with the extension attached
-
-        fs.renameSync(multerPath, `${multerPath}.${extension}`)
-
-        let fileData = {
-          name: req.file.originalname,
-          path: filePath,
-          size: req.file.size,
-          extension: extension,
-        }
-
-        // we create the RoboFile document with the properties of the file
-        RoboFileModel.create(fileData, (err, file) => {
-          if(err) res.status(500).send(err)
-          else res.send(file)
-        })
-      })
-
-      Router.delete( "/filedelete/:id", (req, res) => {
-        RoboFileModel.findOne({_id: req.params.id})
-          .then( file => {
-            let realPath = path.resolve(this.FileDir, file.path)
-            let thumbnailPath = realPath.replace('.', '_thumbnail.')
-            if(!realPath.startsWith(this.FileDir)) return res.status(500).send('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
-
-            // we remove both the file and thumbnail if they exists
-            if(fs.existsSync(realPath)) fs.unlinkSync(realPath)
-            if(fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath)
-
-            // we delete the RoboFile document
-            return RoboFileModel.deleteOne({_id: file._id})
-          })
-          .then( () => res.send() )
-          .catch( err => res.status(500).send(err) )
-      })
-    }
-
-    // Read routes will use "lean" so that results are not immutable
-    Router.get( '/:model/find', (req, res) => {
+    // READ routes
+    // these routes will use "lean" so that results are not immutable
+    Router.get( '/find/:model', (req, res) => {
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
           .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
@@ -688,9 +615,26 @@ class Robogo {
       }
 
       this.CRUDRoute(req, res, mainPart, responsePart, 'R')
+    }) 
+
+    Router.get( '/get/:model/:id', (req, res) => {
+      function mainPart(req, res) {
+        return this.MongooseConnection.model(req.params.model)
+          .findOne({_id: req.params.id}, req.query.projection)
+          .lean({ autopopulate: true, virtuals: true, getters: true })
+      }
+
+      async function responsePart(req, res, result) {
+        if(this.CheckAccess)
+          this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], result, req.accesslevel)
+
+        res.send(result)
+      }
+
+      this.CRUDRoute(req, res, mainPart, responsePart, 'R')
     })
 
-    Router.get( '/:model/search', (req, res) => {
+    Router.get( '/search/:model', (req, res) => {
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
           .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
@@ -717,45 +661,10 @@ class Robogo {
 
       this.CRUDRoute(req, res, mainPart, responsePart, 'R')
     })
+    // ----------------
 
-    Router.get( "/:model/:id", async (req, res) => {
-      function mainPart(req, res) {
-        return this.MongooseConnection.model(req.params.model)
-          .findOne({_id: req.params.id}, req.query.projection)
-          .lean({ autopopulate: true, virtuals: true, getters: true })
-      }
-
-      async function responsePart(req, res, result) {
-        if(this.CheckAccess)
-          this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], result, req.accesslevel)
-
-        res.send(result)
-      }
-
-      this.CRUDRoute(req, res, mainPart, responsePart, 'R')
-    })
-
-    Router.post( "/:model", async (req, res) => {
-      function mainPart(req, res) {
-        if(this.CheckAccess)
-          this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], req.body, req.accesslevel, 'minWriteAccess')
-  
-        const Model = this.MongooseConnection.model(req.params.model)
-        const ModelInstance = new Model(req.body)
-        return ModelInstance.save()
-      }
-
-      async function responsePart(req, res, result) {
-        if(this.CheckAccess)
-          this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], result, req.accesslevel)
-  
-        res.send(result)
-      }
-
-      this.CRUDRoute(req, res, mainPart, responsePart, 'C')
-    })
-
-    Router.patch( "/:model", async (req, res) => {
+    // UPDATE routes
+    Router.patch( '/update/:model', (req, res) => {
       function mainPart(req, res) {
         if(this.CheckAccess)
           this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], req.body, req.accesslevel, 'minWriteAccess')
@@ -770,8 +679,10 @@ class Robogo {
 
       this.CRUDRoute(req, res, mainPart, responsePart, 'U')
     })
+    // ----------------
 
-    Router.delete( "/:model/:id", async (req, res) => {
+    // DELETE routes
+    Router.delete( '/delete/:model/:id', (req, res) => {
       function mainPart(req, res) {
         if(this.CheckAccess) {
           const declinedPaths = this.GetDeclinedPaths(req.params.model, req.accesslevel, 'minWriteAccess', true)
@@ -788,11 +699,113 @@ class Robogo {
 
       this.CRUDRoute(req, res, mainPart, responsePart, 'D')
     })
+    // ----------------
+
+    // SERVICE routes
+    Router.post( '/runner/:service/:fun', (req, res) => {
+      this.ServiceRoute(req, res, 'body')
+    })
+
+    Router.get( '/getter/:service/:fun', (req, res) => {
+      this.ServiceRoute(req, res, 'query')
+    })
+    // ----------------
+
+    // FILE routes
+    if(this.FileDir) {
+      Router.use( `${this.ServeStaticPath}`, express.static(path.resolve(__dirname, this.FileDir)) )
+      Router.use( `${this.ServeStaticPath}`, (req, res) => res.status(404).send('NOT FOUND') ) // If a file is not found in FileDir, send back 404 NOT FOUND
+
+      Router.post( '/fileupload', this.upload.single('file'), (req, res) => {
+        if(req.file.mimetype.startsWith('image')) return this.handleImageUpload(req, res)
+
+        let multerPath    = req.file.path
+        let extension     = req.file.originalname.split('.').pop()
+        let filePath      = `${req.file.filename}.${extension}` // the file will be saved with the extension attached
+
+        fs.renameSync(multerPath, `${multerPath}.${extension}`)
+
+        let fileData = {
+          name: req.file.originalname,
+          path: filePath,
+          size: req.file.size,
+          extension: extension,
+        }
+
+        // we create the RoboFile document with the properties of the file
+        RoboFileModel.create(fileData, (err, file) => {
+          if(err) res.status(500).send(err)
+          else res.send(file)
+        })
+      })
+
+      Router.delete( '/filedelete/:id', (req, res) => {
+        RoboFileModel.findOne({_id: req.params.id})
+          .then( file => {
+            let realPath = path.resolve(this.FileDir, file.path)
+            let thumbnailPath = realPath.replace('.', '_thumbnail.')
+            if(!realPath.startsWith(this.FileDir)) return res.status(500).send('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
+
+            // we remove both the file and thumbnail if they exists
+            if(fs.existsSync(realPath)) fs.unlinkSync(realPath)
+            if(fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath)
+
+            // we delete the RoboFile document
+            return RoboFileModel.deleteOne({_id: file._id})
+          })
+          .then( () => res.send() )
+          .catch( err => res.status(500).send(err) )
+      })
+    }
+    // --------------
+
+    // SPECIAL routes
+    Router.get( '/schema/:model', (req, res) => {
+      if(!this.Schemas[this.BaseDBString][req.params.model]) {
+        this.LogMissingModel(req.params.model)
+        return res.status(500).send('MISSING MODEL')
+      }
+
+      res.send(this.DecycledSchemas[req.params.model])
+    })
+
+    Router.get( '/fields/:model', (req, res) => {
+      if(!this.Schemas[this.BaseDBString][req.params.model]) {
+        this.LogMissingModel(req.params.model)
+        return res.status(500).send('MISSING MODEL')
+      }
+
+      res.send(this.GetFields(req.params.model))
+    })
+
+    Router.get( '/count/:model', (req, res) => {
+      if(!this.Schemas[this.BaseDBString][req.params.model]) {
+        this.LogMissingModel(req.params.model)
+        return res.status(500).send('MISSING MODEL')
+      }
+
+      if(!req.query.filter) req.query.filter = '{}'
+
+      this.MongooseConnection.model(req.params.model).countDocuments(JSON.parse(req.query.filter), (err, count) => {
+        if(err) res.status(500).send(err)
+        else res.send({count})
+      })
+    })
+
+    Router.get( '/searchkeys/:model', (req, res) => {
+      if(!this.Schemas[this.BaseDBString][req.params.model]) {
+        this.LogMissingModel(req.params.model)
+        return res.status(500).send('MISSING MODEL')
+      }
+
+      res.send(this.GetSearchKeys(req.params.model, req.query.depth))
+    })
+    // ------------
 
     return Router
   }
 
-  // The functions below are the logs of robogo, they are formatted using bash sequences
+  // The functions below are the logs of robogo, they are formatted using bash sequences.
   // Colors and formattings can be found at: https://misc.flogisoft.com/bash/tip_colors_and_formatting
   // \e[ should be changed to \x1b[ to work with Node.js
   LogBreakingChanges() {
