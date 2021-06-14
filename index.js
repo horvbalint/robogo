@@ -10,19 +10,19 @@ const Router = express.Router()
 
 class Robogo {
   constructor({
-      MongooseConnection = require('mongoose'),
-      SchemaDir,
-      ServiceDir = null,
-      FileDir = null,
-      ServeStaticPath = '/static',
-      MaxImageSize = 800,
-      CreateThumbnail = false,
-      MaxThumbnailSize = 200,
-      CheckAccess = true,
-      ShowLogs = true,
-      ShowWarnings = true,
-      ShowErrors = true,
-    }) {
+    MongooseConnection = require('mongoose'),
+    SchemaDir,
+    ServiceDir = null,
+    FileDir = null,
+    ServeStaticPath = '/static',
+    MaxImageSize = 800,
+    CreateThumbnail = false,
+    MaxThumbnailSize = 200,
+    CheckAccess = true,
+    ShowLogs = true,
+    ShowWarnings = true,
+    ShowErrors = true,
+  }) {
     this.MongooseConnection   = MongooseConnection
     this.BaseDBString         = MongooseConnection.connections[0]._connectionString
     this.Schemas              = {[this.BaseDBString]: {}}
@@ -192,7 +192,7 @@ class Robogo {
     for(let field of this.DecycledSchemas[modelName])
       this.GenerateSearchKeys(field, keys, maxDepth)
 
-    let keys
+    return keys
   }
 
   /**
@@ -414,7 +414,7 @@ class Robogo {
    * @param {Number} [depth=0] - This parameter should be leaved empty
    */
   GetFields(schema, maxDepth = Infinity, depth = 0) {
-    if(typeof schema == 'string') schema = this.Schemas[this.BaseDBString][schema] // if string was given, we get the schema descriptor
+    if(typeof schema == 'string') schema = (maxDepth == Infinity ? this.DecycledSchemas : this.Schemas[this.BaseDBString])[schema] // if string was given, we get the schema descriptor
     let fields = []
 
     for(let field of schema) {
@@ -538,11 +538,11 @@ class Robogo {
             MiddlewareFunctions.after.call(this, req, res, result)
               .then( () => {
                 responsePart.call(this, req, res, result)
-                  .catch( err => {res.status(500).send(err); console.log(err)} )
+                  .catch( err => {res.status(500).send(err); console.error(err)} )
               })
               .catch( message => this.LogMiddlewareMessage(req.params.model, operation, 'after', message) )
           })
-          .catch( err => {res.status(500).send(err); console.log(err)} )
+          .catch( err => {res.status(500).send(err); console.error(err)} )
       })
       .catch( message => this.LogMiddlewareMessage(req.params.model, operation, 'before', message) )
   }
@@ -655,8 +655,8 @@ class Robogo {
           threshold: req.query.threshold
         })
   
-        let results = fuse.search(req.query.term).map(r => r.item) // fuse.js's results include some other things, then the documents so we need to get them
-        res.send(results)
+        let matched = fuse.search(req.query.term).map(r => r.item) // fuse.js's results include some other things, then the documents so we need to get them
+        res.send(matched)
       }
 
       this.CRUDRoute(req, res, mainPart, responsePart, 'R')
