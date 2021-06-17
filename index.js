@@ -46,8 +46,6 @@ class Robogo {
     this.ShowErrors           = ShowErrors
     this.upload               = null
 
-    this.LogBreakingChanges()
-
     if(FileDir)
       this.upload = multer({dest: FileDir}) // multer will handle the saving of files, when one is uploaded
 
@@ -105,7 +103,7 @@ class Robogo {
     let fields = []
 
     for(const FieldPath in Paths)
-      this.GenerateObjFieldTree(fields, FieldPath, Paths[FieldPath])
+      this.GenerateObjFieldTree(fields, FieldPath, Paths[FieldPath], model.modelName)
 
     return fields
   }
@@ -242,7 +240,7 @@ class Robogo {
    * @param {String} fieldPath - The "." separated path of the field in the mongoose schema
    * @param {Object} fieldDescriptor - The mongoose descriptor of the field
    */
-  GenerateObjFieldTree(currentFieldLevel, fieldPath, fieldDescriptor) {
+  GenerateObjFieldTree(currentFieldLevel, fieldPath, fieldDescriptor, modelName) {
     let fieldKeys = fieldPath.split('.') // we have no information of the fields with theese keys, other then that they are Objects containign the field of the next step and possibly others
     let lastKey = fieldKeys.pop() // this is the field that we have information about from mongoose
 
@@ -273,7 +271,7 @@ class Robogo {
       currentFieldLevel = currentFieldLevel[ind].subfields
     }
     // when every parent descriptor is created, we create the one we have information about from mongoose
-    currentFieldLevel.push( this.GenerateSchemaField(lastKey, fieldDescriptor) )
+    currentFieldLevel.push( this.GenerateSchemaField(lastKey, fieldDescriptor, modelName) )
   }
 
   /**
@@ -281,7 +279,7 @@ class Robogo {
    * @param {String} fieldKey 
    * @param {Object} fieldDescriptor - A mongoose field descriptor
    */
-  GenerateSchemaField(fieldKey, fieldDescriptor) {
+  GenerateSchemaField(fieldKey, fieldDescriptor, modelName) {
     // we basically collect the information we know about the field
     let field = {
       key: fieldKey,
@@ -298,6 +296,7 @@ class Robogo {
     if(fieldDescriptor.options.marked) field.marked = true
     if(fieldDescriptor.options.hidden) field.hidden = true
 
+    // if the field is an array we extract the informations of the type it holds
     if(field.isArray) {
       const Emb = fieldDescriptor.$embeddedSchemaType
 
@@ -318,11 +317,26 @@ class Robogo {
       field.type = 'Object'
       field.subfields = []
     }
+    // If a Mixed type is found we try to check if it was intentional or not
+    // if not, then we warn the user about the possible danger
+    // TODO: Find a better way to do this
     else if(field.type == 'Mixed') {
+      let givenType = field.type
       field.type = 'Object'
 
-      if(!fieldDescriptor.options.type.schemaName || fieldDescriptor.options.type.schemaName != 'Mixed')
-        this.LogMixedType(fieldKey, field.name)  
+      if(fieldDescriptor.options) {
+        if(Array.isArray(fieldDescriptor.options.type)) {
+          if(Object.keys(fieldDescriptor.options.type[0]).length)
+            givenType = fieldDescriptor.options.type[0].schemaName || fieldDescriptor.options.type[0].type.schemaName
+        }
+        else {
+          if(Object.keys(fieldDescriptor.options.type).length)
+            givenType = fieldDescriptor.options.type.schemaName
+        }
+      }
+      
+      if(givenType != 'Mixed')
+        this.LogMixedType(modelName, fieldKey, field)
     }
 
     // if the field has a ref, we check if it is a string or a model
@@ -333,7 +347,7 @@ class Robogo {
       field.DBString = isModel ? givenRef.db._connectionString : this.BaseDBString // we need to know which connection the ref model is from
       field.ref = isModel ? givenRef.modelName : givenRef
       
-      // if the model is form another connection, we generate a schema descriptor for it, so we can later use it as ref
+      // if the model is from another connection, we generate a schema descriptor for it, so we can later use it as ref
       if(field.DBString != this.BaseDBString) {
         if(!this.Schemas[field.DBString]) this.Schemas[field.DBString] = {}
         this.Schemas[field.DBString][field.ref] = this.GenerateSchema(givenRef)
@@ -808,47 +822,38 @@ class Robogo {
   // The functions below are the logs of robogo, they are formatted using bash sequences.
   // Colors and formattings can be found at: https://misc.flogisoft.com/bash/tip_colors_and_formatting
   // \e[ should be changed to \x1b[ to work with Node.js
-  LogBreakingChanges() {
-    console.log('\x1b[36m\x1b[4m\x1b[1m%s\x1b[0m', '\nROBOGO CHANGES:')
-    console.log('\x1b[36m%s\x1b[0m', `
-BREAKING CHANGES since version 1.4.2:
-
-The following config fields were renamed:
-  • alias -> name,
-  • minReadAuth -> minReadAccess
-  • minWriteAuth -> minWriteAccess
-  
-  Please update them, to have all the functionalities.
-
-The way accesslevel is handled has also changed.
-The default accesslevel is now 0 and the higher an accesslevel is on a field, the higher accesslevel is needed to modify it.
-There is also no maximum accesslevel.\n`)
-  }
-
-  LogMixedType(key, name) {
+  LogMixedType(modelName, key, field) {
     if(!this.ShowWarnings) return
 
     console.log('\x1b[93m\x1b[4m\x1b[1m%s\x1b[0m', '\nROBOGO WARNING:')
     console.log('\x1b[93m%s\x1b[0m', `
-'Mixed' type field '${key}'!
+'Mixed' type field '${key}' in model '${modelName}'!
 Fields in '${key}' won\'t be access checked and they won\'t appear in the robogo schema!
 
 If you need those functionalities use the following syntax:
 ${key}: {
-  name: ${name},
   type: new mongoose.Schema({
     key: value
-  }),
-  ...
+  }),`)
+    if(field.name) console.log('\x1b[93m%s\x1b[0m', 
+`  name: ${field.name},`)
+    if(field.description) console.log('\x1b[93m%s\x1b[0m', 
+`  description: ${field.description},`)
+    console.log('\x1b[93m%s\x1b[0m', 
+`  ...
 }
 
 Instead of:
 ${key}: {
-  name: ${name},
   type: {
     key: value
-  },
-  ...
+  },`)
+    if(field.name) console.log('\x1b[93m%s\x1b[0m', 
+`  name: ${field.name},`)
+    if(field.description) console.log('\x1b[93m%s\x1b[0m', 
+`  description: ${field.description},`)
+    console.log('\x1b[93m%s\x1b[0m', 
+`  ...
 }\n`)
   }
 
