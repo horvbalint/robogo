@@ -3,7 +3,7 @@
 
 Robogo is a backend multitool for projects using [MongoDB](https://www.mongodb.com/), [Mongoose](https://www.npmjs.com/package/mongoose) and [Express](https://www.npmjs.com/package/express). Its aim is to reduce the amount of time needed to start, extend and maintain a project. Robogo started out as a CRUD operation helper, but soon evolved into a much more complex system with a lots of features on top of being a CRUD engine.
 
-It is recommended to use this package's frontend helper [robolt](TODO) to make things simpler on the frontend.
+It is recommended to use this package's frontend helper [robolt](https://www.npmjs.com/package/robolt) to make things simpler on the frontend.
 
 
 ## Table of contents
@@ -208,7 +208,7 @@ module.exports = Services
 
 In this section you can find the description of the endpoints that are created by robogo. All of the routes are prefixed with the path that was used, when [the routes were registered in Express using the GenerateRoutes method](#installSection). So in this example '/api'.
 
-It is recommended to use this package's frontend helper [robolt](TODO), that will hide the complexity of the routes.
+It is recommended to use this package's frontend helper [robolt](https://www.npmjs.com/package/robolt), that will hide the complexity of the routes.
 
 <a name="createRoutes"></a>
 ### Create routes
