@@ -512,16 +512,18 @@ class Robogo {
    * @param {Function} middlewareFunction 
    */
   addMiddleware(modelName, operation, timing, middlewareFunction) {
+    let errorOccurrence =  `adding the custom middleware '${modelName} -> ${operation} -> ${timing}'`
+
     if(!this.Middlewares[modelName]) {
-      this.LogMissingModel(modelName)
+      this.LogMissingModel(modelName, errorOccurrence)
       throw new Error(`MISSING MODEL: ${modelName}`)
     }
     if(!this.Operations.includes(operation)) {
-      this.LogUnknownOperation(operation)
+      this.LogUnknownOperation(operation,  errorOccurrence)
       throw new Error(`Middleware: Operation should be one of: ${this.Operations}`)
     }
     if(!this.Timings.includes(timing)) {
-      this.LogUnknownTiming(timing)
+      this.LogUnknownTiming(timing,  errorOccurrence)
       throw new Error(`Middleware: Timing should be one of: ${this.Timings}`)
     }
 
@@ -539,7 +541,7 @@ class Robogo {
   CRUDRoute(req, res, mainPart, responsePart, operation) {
     // if the model is unkown send an error
     if(!this.Schemas[this.BaseDBString][req.params.model]) {
-      this.LogMissingModel(req.params.model)
+      this.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
       return res.status(500).send('MISSING MODEL')
     }
 
@@ -569,11 +571,11 @@ class Robogo {
    */
   ServiceRoute(req, res, paramsKey) {
     if(!this.Services[req.params.service]) {
-      this.LogMissingService(req.params.service)
+      this.LogMissingService(req.params.service, `serving the route: '${req.method} ${req.path}'`)
       return res.status(500).send('MISSING SERVICE')
     }
     if(!this.Services[req.params.service][req.params.fun]) {
-      this.LogMissingServiceFunction(req.params.service, req.params.fun)
+      this.LogMissingServiceFunction(req.params.service, req.params.fun, `serving the route: '${req.method} ${req.path}'`)
       return res.status(500).send('MISSING SERVICE FUNCTION')
     }
 
@@ -776,7 +778,7 @@ class Robogo {
     // SPECIAL routes
     Router.get( '/schema/:model', (req, res) => {
       if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model)
+        this.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
         return res.status(500).send('MISSING MODEL')
       }
 
@@ -785,7 +787,7 @@ class Robogo {
 
     Router.get( '/fields/:model', (req, res) => {
       if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model)
+        this.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
         return res.status(500).send('MISSING MODEL')
       }
 
@@ -794,7 +796,7 @@ class Robogo {
 
     Router.get( '/count/:model', (req, res) => {
       if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model)
+        this.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
         return res.status(500).send('MISSING MODEL')
       }
 
@@ -808,7 +810,7 @@ class Robogo {
 
     Router.get( '/searchkeys/:model', (req, res) => {
       if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model)
+        this.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
         return res.status(500).send('MISSING MODEL')
       }
 
@@ -822,122 +824,134 @@ class Robogo {
   // The functions below are the logs of robogo, they are formatted using bash sequences.
   // Colors and formattings can be found at: https://misc.flogisoft.com/bash/tip_colors_and_formatting
   // \e[ should be changed to \x1b[ to work with Node.js
-  LogMixedType(modelName, key, field) {
-    if(!this.ShowWarnings) return
+  LogMessage(type, occurrence, title, description) {
+    let mainTitle, color
 
-    console.log('\x1b[93m\x1b[4m\x1b[1m%s\x1b[0m', '\nROBOGO WARNING:')
-    console.log('\x1b[93m%s\x1b[0m', `
-'Mixed' type field '${key}' in model '${modelName}'!
-Fields in '${key}' won\'t be access checked and they won\'t appear in the robogo schema!
+    if(type == 'error') {
+      if(!this.ShowErrors) return
+      mainTitle = 'ROBOGO ERROR'
+      color = 91
+    }
+    else if(type == 'warning') {
+      if(!this.ShowWarnings) return
+      mainTitle = 'ROBOGO WARNING'
+      color = 93
+    }
+    else if(type == 'log') {
+      if(!this.ShowWarnings) return
+      mainTitle = 'ROBOGO LOG'
+      color = 34
+    }
 
-If you need those functionalities use the following syntax:
-${key}: {
-  type: new mongoose.Schema({
-    key: value
-  }),`)
-    if(field.name) console.log('\x1b[93m%s\x1b[0m', 
-`  name: ${field.name},`)
-    if(field.description) console.log('\x1b[93m%s\x1b[0m', 
-`  description: ${field.description},`)
-    console.log('\x1b[93m%s\x1b[0m', 
-`  ...
-}
-
-Instead of:
-${key}: {
-  type: {
-    key: value
-  },`)
-    if(field.name) console.log('\x1b[93m%s\x1b[0m', 
-`  name: ${field.name},`)
-    if(field.description) console.log('\x1b[93m%s\x1b[0m', 
-`  description: ${field.description},`)
-    console.log('\x1b[93m%s\x1b[0m', 
-`  ...
-}\n`)
+    console.log(`\x1b[${color}m\x1b[7m\x1b[1m%s\x1b[0m`, `\n ${mainTitle} `)
+    console.log(`\x1b[${color}m%s\x1b[0m`, `occurred while ${occurrence}.\n`)
+    console.log(`\x1b[${color}m\x1b[1m%s\x1b[0m`, title)
+    console.log(`\x1b[${color}m%s\x1b[0m`, description, '\n')
   }
 
-  LogMissingModel(modelName) {
-    if(!this.ShowErrors) return
-    
-    console.log('\x1b[91m\x1b[4m\x1b[1m%s\x1b[0m', '\nROBOGO ERROR:')
-    console.log('\x1b[91m%s\x1b[0m', `
-MISSING MODEL: '${modelName}'
-
+  LogMissingModel(modelName, occurrence) {
+    let title = `MISSING MODEL: '${modelName}'`
+    let description = `
 There is no model registered with the name '${modelName}'.
 This is most likely just a typo.
 
 If the name is correct check, if:
   • the file containg the model is in the folder which was given to robogo
-  • the file is exporting the model, so robogo can import it\n`)
+  • the file is exporting the model, so robogo can import it`
+
+    this.LogMessage('error', occurrence, title, description)
   }
 
-  LogMissingService(serviceName) {
-    if(!this.ShowErrors) return
-    
-    console.log('\x1b[91m\x1b[4m\x1b[1m%s\x1b[0m', '\nROBOGO ERROR:')
-    console.log('\x1b[91m%s\x1b[0m', `
-MISSING SERVICE: '${serviceName}'
-
+  LogMissingService(serviceName, occurrence) {
+    let title = `MISSING SERVICE: '${serviceName}'`
+    let description = `
 There is no service registered with the name '${serviceName}'.
 This is most likely just a typo.
 
 If the name is correct check, if:
   • the file containg the service is in the folder which was given to robogo
-  • the file is exporting the service, so robogo can import it\n`)
+  • the file is exporting the service, so robogo can import it`
+
+    this.LogMessage('error', occurrence, title, description)
   }
 
-  LogMissingServiceFunction(serviceName, functionName) {
-    if(!this.ShowErrors) return
-    
-    console.log('\x1b[91m\x1b[4m\x1b[1m%s\x1b[0m', '\nROBOGO ERROR:')
-    console.log('\x1b[91m%s\x1b[0m', `
-MISSING SERVICE FUNCTION: '${functionName}'
-
+  LogMissingServiceFunction(serviceName, functionName, occurrence) {
+    let title = `MISSING SERVICE FUNCTION: '${functionName}'`
+    let description = `
 There is no function in the service '${serviceName}' with the name '${functionName}'.
 This is most likely just a typo.
 
 If the name is correct check, if:
-  • the '${serviceName}' service is the one containing the function\n`)
+  • the '${serviceName}' service is the one containing the function`
+
+    this.LogMessage('error', occurrence, title, description)
   }
 
-LogUnknownOperation(operation) {
-  if(!this.ShowErrors) return
-  
-  console.log('\x1b[91m\x1b[4m\x1b[1m%s\x1b[0m', '\nROBOGO ERROR:')
-  console.log('\x1b[91m%s\x1b[0m', `
-UNKNOWN OPERATION: '${operation}'
-
-The operation '${operation}' is not known.
+  LogUnknownOperation(operation, occurrence) {
+    let title = `UNKNOWN OPERATION: '${operation}'`
+    let description = `
+No operation exists with the name '${operation}'.
 Operation should be one of:
   • 'C'
   • 'R'
   • 'U'
-  • 'D'\n`)
+  • 'D'`
+
+    this.LogMessage('error', occurrence, title, description)
   }
 
-LogUnknownTiming(timing) {
-  if(!this.ShowErrors) return
-  
-  console.log('\x1b[91m\x1b[4m\x1b[1m%s\x1b[0m', '\nROBOGO ERROR:')
-  console.log('\x1b[91m%s\x1b[0m', `
-UNKNOWN TIMING: '${timing}'
-
-The timing '${timing}' is not known.
+  LogUnknownTiming(timing, occurrence) {
+    let title = `UNKNOWN TIMING: '${timing}'`
+    let description = `
+No timing exists with the name '${timing}'.
 Timing should be one of:
   • 'before'
-  • 'after'\n`)
+  • 'after'`
+
+    this.LogMessage('error', occurrence, title, description)
   }
 
-LogMiddlewareMessage(modelName, operation, timing, message) {
-  if(!this.ShowLogs) return
-  
-  console.log('\x1b[34m\x1b[4m\x1b[1m%s\x1b[0m', '\nROBOGO LOG:')
-  console.log('\x1b[34m%s\x1b[0m', `
-REQUEST STOPPED 
+  LogMixedType(modelName, key, field) {
+    let occurrence = `processing the '${modelName}' model`
+    let title = `MIXED TYPE FIELD: '${key}'`
 
+    let description =  `
+Fields in '${key}' won\'t be access checked and they won\'t appear in the robogo schema!
+If you need those functionalities use the following syntax:
+
+${key}: {
+  type: new mongoose.Schema({
+    key: value
+  }),`
+
+    if(field.name) description += `\n  name: ${field.name},`
+    if(field.description) description += `\n  description: ${field.description},`
+    description += `\n  ...
+}
+
+Instead of:
+
+${key}: {
+  type: {
+    key: value
+  },`
+    if(field.name) description += `\n  name: ${field.name},`
+    if(field.description) description += `\n  description: ${field.description},`
+    description += `\n  ...
+}`
+
+    this.LogMessage('warning', occurrence, title, description)
+  }
+
+  LogMiddlewareMessage(modelName, operation, timing, message) {
+    let occurrence = `running the custom '${modelName} -> ${operation} -> ${timing}' middleware`
+    let title = 'REQUEST STOPPED'
+
+    let description = `
 The custom '${modelName} -> ${operation} -> ${timing}' middleware stopped a request.
-Given reason: '${message}'\n`)
+Given reason: '${message}'`
+
+    this.LogMessage('log', occurrence, title, description)
   }
 }
 
