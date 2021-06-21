@@ -838,7 +838,7 @@ class Robogo {
       color = 93
     }
     else if(type == 'log') {
-      if(!this.ShowWarnings) return
+      if(!this.ShowLogs) return
       mainTitle = 'ROBOGO LOG'
       color = 34
     }
