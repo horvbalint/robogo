@@ -23,31 +23,32 @@ class Robogo {
     ShowWarnings = true,
     ShowErrors = true,
   }) {
-    this.MongooseConnection   = MongooseConnection
-    this.BaseDBString         = MongooseConnection.connections[0]._connectionString
-    this.Schemas              = {[this.BaseDBString]: {}}
-    this.PathSchemas          = {}
-    this.DecycledSchemas      = {}
-    this.RoboFileShema        = []
-    this.Services             = {}
-    this.Middlewares          = {}
-    this.Operations           = ['C', 'R', 'U', 'D']
-    this.Timings              = ['after', 'before']
-    this.SchemaDir            = SchemaDir
-    this.ServiceDir           = ServiceDir
-    this.FileDir              = FileDir
-    this.ServeStaticPath      = ServeStaticPath
-    this.MaxImageSize         = MaxImageSize
-    this.CreateThumbnail      = CreateThumbnail
-    this.MaxThumbnailSize     = MaxThumbnailSize
-    this.CheckAccess          = CheckAccess
-    this.ShowLogs             = ShowLogs
-    this.ShowWarnings         = ShowWarnings
-    this.ShowErrors           = ShowErrors
-    this.upload               = null
+    this.MongooseConnection     = MongooseConnection
+    this.BaseDBString           = String(MongooseConnection.connections[0]._connectionString)
+    this.Schemas                = {[this.BaseDBString]: {}}
+    this.PathSchemas            = {}
+    this.DecycledSchemas        = {}
+    this.RoboFileShema          = []
+    this.ModelsAccessCheckNeeds = {}
+    this.Services               = {}
+    this.Middlewares            = {}
+    this.Operations             = ['C', 'R', 'U', 'D']
+    this.Timings                = ['after', 'before']
+    this.SchemaDir              = SchemaDir
+    this.ServiceDir             = ServiceDir
+    this.FileDir                = FileDir
+    this.ServeStaticPath        = ServeStaticPath
+    this.MaxImageSize           = MaxImageSize
+    this.CreateThumbnail        = CreateThumbnail
+    this.MaxThumbnailSize       = MaxThumbnailSize
+    this.CheckAccess            = CheckAccess
+    this.ShowLogs               = ShowLogs
+    this.ShowWarnings           = ShowWarnings
+    this.ShowErrors             = ShowErrors
+    this.Upload                 = null
 
     if(FileDir)
-      this.upload = multer({dest: FileDir}) // multer will handle the saving of files, when one is uploaded
+      this.Upload = multer({dest: FileDir}) // multer will handle the saving of files, when one is uploaded
 
     // Imports every .js file from "ServiceDir" into the "Services" object
     if(ServiceDir) {
@@ -87,11 +88,15 @@ class Robogo {
       }
     }
 
-    // Now every schema is ready, we can ref them in each other
+    // Now every schema is ready, we can ref them in each other and check which one of them needs to be access checked when queried
     for(let DBString in this.Schemas)
       for(let modelName in this.Schemas[DBString])
-        for(let field of this.Schemas[DBString][modelName])
+        for(let field of this.Schemas[DBString][modelName]) {
+          if(DBString == this.BaseDBString && !this.ModelsAccessCheckNeeds[modelName]) // We only want to check models from the default connection as only those can be queried trough robogo
+            this.ModelsAccessCheckNeeds[modelName] = this.checkIfModelNeedsAccessCheck(modelName, field)
+
           this.plugInFieldRef(field)
+        }
   }
 
   /**
@@ -292,6 +297,7 @@ class Robogo {
       default: fieldDescriptor.options.default || null,
       minReadAccess: fieldDescriptor.options.minReadAccess || 0,
       minWriteAccess: fieldDescriptor.options.minWriteAccess || 0,
+      autopopulate: fieldDescriptor.options.autopopulate || false
     }
     if(fieldDescriptor.options.marked) field.marked = true
     if(fieldDescriptor.options.hidden) field.hidden = true
@@ -310,6 +316,7 @@ class Robogo {
       field.default = field.default || Emb.options.default || null
       field.minReadAccess = Math.max(field.minReadAccess, (Emb.options.minReadAccess || 0))
       field.minWriteAccess = Math.max(field.minWriteAccess, (Emb.options.minWriteAccess || 0))
+      field.autopopulate = Emb.options.autopopulate
     }
 
     if(field.type == 'ObjectID') field.type = 'Object'
@@ -358,6 +365,26 @@ class Robogo {
   }
 
   /**
+   * Recursively checks if a model has at least one field with access check or has a ref to a model that has one.
+   * @param {String} modelName - Name of the model
+   * @param {Object} field - A robogo field descriptor
+   */
+  checkIfModelNeedsAccessCheck(modelName, field) {
+    if(this.ModelsAccessCheckNeeds[modelName])
+      return this.ModelsAccessCheckNeeds[modelName]
+
+    if(field.minReadAccess || field.minWriteAccess)
+      return true
+
+    if(!field.subfields) return false
+      
+    if(field.autopopulate && field.ref)
+      return field.subfields.some( f => this.checkIfModelNeedsAccessCheck(field.ref, f) )
+
+    return field.subfields.some( f => this.checkIfModelNeedsAccessCheck(modelName, f) )
+  }
+
+  /**
    * Recursively plugs in the references of the given field and its subfields.
    * @param {Object} field - A robogo field descriptor
    */
@@ -398,19 +425,21 @@ class Robogo {
    */
   RemoveDeclinedFields(modelName, documents, accesslevel = 0, authField = 'minReadAccess') {
     for(const document of documents)
-      this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][modelName], document, accesslevel, authField)
+      this.RemoveDeclinedFieldsFromObject(modelName, document, accesslevel, authField)
 
     return documents
   }
 
   /**
    * Removes every field from an object, which need a higher accesslevel, then given as parameter.
-   * @param {Array} fields - A robogo schema descriptor
+   * @param {Array|String} fields - A robogo schema descriptor or a models name
    * @param {*} object - The object to remove from
    * @param {*} [accesslevel=0]  
    * @param {*} [authField='minReadAccess']  
    */
   RemoveDeclinedFieldsFromObject(fields, object, accesslevel = 0, authField = 'minReadAccess') {
+    if(typeof fields == 'string') fields = this.Schemas[this.BaseDBString][fields] // if model name was given, then we get the models fields 
+
     for(let field of fields) {
       if(field[authField] > accesslevel) delete object[field.key]
 
@@ -591,9 +620,11 @@ class Robogo {
   GenerateRoutes() {
     // CREATE routes
     Router.post( '/create/:model', (req, res) => {
+      let checkAccess = req.checkAccess || this.CheckAccess && this.ModelsAccessCheckNeeds[req.params.model]
+
       function mainPart(req, res) {
-        if(this.CheckAccess)
-          this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], req.body, req.accesslevel, 'minWriteAccess')
+        if(checkAccess)
+          this.RemoveDeclinedFieldsFromObject(req.params.model, req.body, req.accesslevel, 'minWriteAccess')
   
         const Model = this.MongooseConnection.model(req.params.model)
         const ModelInstance = new Model(req.body)
@@ -601,8 +632,8 @@ class Robogo {
       }
 
       async function responsePart(req, res, result) {
-        if(this.CheckAccess)
-          this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], result, req.accesslevel)
+        if(checkAccess)
+          this.RemoveDeclinedFieldsFromObject(req.params.model, result, req.accesslevel)
   
         res.send(result)
       }
@@ -614,6 +645,8 @@ class Robogo {
     // READ routes
     // these routes will use "lean" so that results are not immutable
     Router.get( '/read/:model', (req, res) => {
+      let checkAccess = req.checkAccess || this.CheckAccess && this.ModelsAccessCheckNeeds[req.params.model]
+
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
           .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
@@ -624,7 +657,7 @@ class Robogo {
       }
 
       async function responsePart(req, res, results) {
-        if(this.CheckAccess)
+        if(checkAccess)
           this.RemoveDeclinedFields(req.params.model, results, req.accesslevel)
 
         res.send(results)
@@ -634,6 +667,8 @@ class Robogo {
     }) 
 
     Router.get( '/get/:model/:id', (req, res) => {
+      let checkAccess = req.checkAccess || this.CheckAccess && this.ModelsAccessCheckNeeds[req.params.model]
+
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
           .findOne({_id: req.params.id}, req.query.projection)
@@ -641,8 +676,8 @@ class Robogo {
       }
 
       async function responsePart(req, res, result) {
-        if(this.CheckAccess)
-          this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], result, req.accesslevel)
+        if(checkAccess)
+          this.RemoveDeclinedFieldsFromObject(req.params.model, result, req.accesslevel)
 
         res.send(result)
       }
@@ -651,6 +686,8 @@ class Robogo {
     })
 
     Router.get( '/search/:model', (req, res) => {
+      let checkAccess = req.checkAccess || this.CheckAccess && this.ModelsAccessCheckNeeds[req.params.model]
+
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
           .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
@@ -658,7 +695,7 @@ class Robogo {
       }
 
       async function responsePart(req, res, results) {
-        if(this.CheckAccess)
+        if(checkAccess)
           this.RemoveDeclinedFields(req.params.model, results, req.accesslevel)
         
         if(!req.query.threshold) req.query.threshold = 0.4
@@ -681,9 +718,11 @@ class Robogo {
 
     // UPDATE routes
     Router.patch( '/update/:model', (req, res) => {
+      let checkAccess = req.checkAccess || this.CheckAccess && this.ModelsAccessCheckNeeds[req.params.model]
+
       function mainPart(req, res) {
-        if(this.CheckAccess)
-          this.RemoveDeclinedFieldsFromObject(this.Schemas[this.BaseDBString][req.params.model], req.body, req.accesslevel, 'minWriteAccess')
+        if(checkAccess)
+          this.RemoveDeclinedFieldsFromObject(req.params.model, req.body, req.accesslevel, 'minWriteAccess')
 
         return this.MongooseConnection.model(req.params.model)
           .updateOne({ _id: req.body._id }, req.body)
@@ -699,8 +738,10 @@ class Robogo {
 
     // DELETE routes
     Router.delete( '/delete/:model/:id', (req, res) => {
+      let checkAccess = req.checkAccess || this.CheckAccess && this.ModelsAccessCheckNeeds[req.params.model]
+
       function mainPart(req, res) {
-        if(this.CheckAccess) {
+        if(checkAccess) {
           const declinedPaths = this.GetDeclinedPaths(req.params.model, req.accesslevel, 'minWriteAccess', true)
           if(declinedPaths.length) return Promise.reject('PERMISSION DENIED')
         }
@@ -732,7 +773,7 @@ class Robogo {
       Router.use( `${this.ServeStaticPath}`, express.static(path.resolve(__dirname, this.FileDir)) )
       Router.use( `${this.ServeStaticPath}`, (req, res) => res.status(404).send('NOT FOUND') ) // If a file is not found in FileDir, send back 404 NOT FOUND
 
-      Router.post( '/fileupload', this.upload.single('file'), (req, res) => {
+      Router.post( '/fileupload', this.Upload.single('file'), (req, res) => {
         if(req.file.mimetype.startsWith('image')) return this.handleImageUpload(req, res)
 
         let multerPath    = req.file.path
