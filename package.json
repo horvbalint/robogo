@@ -1,6 +1,6 @@
 {
   "name": "robogo",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "a backend multitool for projects using MongoDB, Mongoose and Express",
   "main": "index.js",
   "scripts": {

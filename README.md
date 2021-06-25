@@ -135,12 +135,14 @@ In the case of [Create](#createRoutes) and [Update](#updateRoutes) routes the **
 
 If someone is trying to delete a document with a field with greater minWriteAccess then the users accesslevel, the request will fail and the 'EPERM' message will be sent back.
 
-At least **one** of the following requirements has to be true for a model, for it to be access checked:
+### Requirements and disabling
 
- * has at least one field with a minReadAccess or minWriteAccess attribute higher then 0
+Disabling access checking can make requests a bit faster (~150ms when reading 14.000 bigger documents). This can be done globaly in the [constructor](#installSection), but you can also disable (or enable) access checking on a per request basis, by appending a 'checkAccess' property in an express middleware to the req object (like req.checkAccess) and setting it to false (or true).
+
+Robogo tries to optimize its requests, so access checking will only take place when at least **one** of the following requirements is true for a model:
+
+ * has at least one field with a minReadAccess (in case of reading) or minWriteAccess (in case of writing) attribute higher then the accesslevel of the request (req.accesslevel)
  * has at least one field that uses the [mongoose-autopopulate](https://www.npmjs.com/package/mongoose-autopopulate) package and has a reference to a model that fulfills the first point.
-
-If none of these is true for a model, then no access checking will take place when the model is queried. 
 
 
 <br></br>
