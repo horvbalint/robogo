@@ -454,9 +454,9 @@ class Robogo {
   /**
    * Removes every field from an object, which need a higher accesslevel, then given as parameter.
    * @param {Array|String} fields - A robogo schema descriptor or a models name
-   * @param {*} object - The object to remove from
-   * @param {*} [accesslevel=0]  
-   * @param {*} [authField='minReadAccess']  
+   * @param {Object} object - The object to remove from
+   * @param {Number} [accesslevel=0]  
+   * @param {String} [authField='minReadAccess']  
    */
   RemoveDeclinedFieldsFromObject(fields, object, accesslevel = 0, authField = 'minReadAccess') {
     if(typeof fields == 'string') fields = this.Schemas[this.BaseDBString][fields] // if model name was given, then we get the models fields 
@@ -472,13 +472,38 @@ class Robogo {
   }
 
   /**
-   * Recursively creates field descriptors that only have those information, which can be useful on the frontend
+   * Removes every field from a schema descriptor, which have a higher minReadAccess then the given accesslevel.
+   * @param {Array|String} fields - A robogo schema descriptor or a models name
+   * @param {Number} [accesslevel=0]
+   */
+  RemoveDeclinedFieldsFromSchema(schema, accesslevel = 0) {
+    if(typeof schema == 'string') schema = this.DecycledSchemas[schema] // if string was given, we get the schema descriptor
+
+    let fields = []
+
+    for(let field of schema) {
+      if(field.minReadAccess > accesslevel) continue
+
+      if(field.subfields)
+        field.subfields = this.RemoveDeclinedFieldsFromSchema(field.subfields, accesslevel)
+      
+      fields.push(JSON.parse(JSON.stringify(field)))
+    }
+
+    return fields
+  }
+
+  /**
+   * Recursively creates field descriptors that only have those information, which can be useful on the frontend.
+   * This function does NOT check field access, if that is needed please provide the result of the RemoveDeclinedFieldsFromSchema call as the first parameter.
    * @param {(String|Array)} schema - Model name or robogo schema descriptor 
    * @param {Number} [maxDepth=Infinity] - Maximum reference depth
    * @param {Number} [depth=0] - This parameter should be leaved empty
    */
   GetFields(schema, maxDepth = Infinity, depth = 0) {
-    if(typeof schema == 'string') schema = (maxDepth == Infinity ? this.DecycledSchemas : this.Schemas[this.BaseDBString])[schema] // if string was given, we get the schema descriptor
+    if(typeof schema == 'string')
+      schema = (maxDepth == Infinity ? this.DecycledSchemas : this.Schemas[this.BaseDBString])[schema] // if string was given, we get the schema descriptor
+
     let fields = []
 
     for(let field of schema) {
@@ -855,7 +880,13 @@ class Robogo {
         return res.status(500).send('MISSING MODEL')
       }
 
-      res.send(this.DecycledSchemas[req.params.model])
+      let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+
+      let schema = this.DecycledSchemas[req.params.model]
+      if(checkReadAccess)
+        schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accesslevel)
+
+      res.send(schema)
     })
 
     Router.get( '/fields/:model', (req, res) => {
@@ -864,7 +895,13 @@ class Robogo {
         return res.status(500).send('MISSING MODEL')
       }
 
-      res.send(this.GetFields(req.params.model))
+      let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+
+      let schema = this.DecycledSchemas[req.params.model]
+      if(checkReadAccess)
+        schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accesslevel)
+
+      res.send(this.GetFields(schema))
     })
 
     Router.get( '/count/:model', (req, res) => {

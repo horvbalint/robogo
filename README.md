@@ -7,21 +7,20 @@ It is recommended to use this package's frontend helper [robolt](https://www.npm
 
 
 ## Table of contents
-* [Getting started](#installSection)
-* [Schemas](#schemasSection)
-* [Field Access](#fieldaccessSection)
-* [Working with files](#filesSection)
-* [Services](#servicesSection)
-* [Routes:](#routesSection)
-  * [Create](#createRoutes)
-  * [Read](#readRoutes)
-  * [Update](#updateRoutes)
-  * [Delete](#deleteRoutes)
-  * [Service](#serviceRoutes)
-  * [File](#fileRoutes)
-  * [Special](#specialRoutes)
-* [Middlewares](#middlewareSection)
-
+* [Getting started](#getting-started)
+* [Schemas](#schemas)
+* [Field Access](#field-access)
+* [Working with files](#working-with-files)
+* [Services](#services)
+* [Routes:](#routes)
+  * [Create](#create-routes)
+  * [Read](#read-routes)
+  * [Update](#update-routes)
+  * [Delete](#delete-routes)
+  * [Service](#service-routes)
+  * [File](#file-routes)
+  * [Special](#special-routes)
+* [Middlewares](#adding-custom-middlewares)
 
 
 ## Disclaimer
@@ -34,7 +33,7 @@ Thank You in advance!
 
 
 <br></br>
-<a name="installSection"></a>
+<a name="getting-started"></a>
 ## Getting started
 > The documentation will refer back to this section, so don't worry if you don't understand something now.
 
@@ -59,7 +58,7 @@ The constructor uses the following parameters:
 | ServiceDir         | String  | Absolute path to the folder that is containing the service files.                                                                                                                                                                         | null                |
 | FileDir            | String  | Absolute path to the folder in which uploaded files should be stored.                                                                                                                                                                     | null                |
 | ServeStaticPath    | String  | Relative path through which files in the FileDir will be accessible.                                                                                                                                                                      | '/static'           |
-| MaxImageSize       | Number  | Uploaded images higher or wider then this number will be resized to this size.**\*** | 800                 |
+| MaxImageSize       | Number  | Uploaded images higher or wider than this number will be resized to this size.**\*** | 800                 |
 | CreateThumbnail    | Boolean | Indicates whether robogo should create a small sized version of the images that are uploaded or not.                                                                                                                                  | false               |
 | MaxThumbnailSize   | Number  | If CreateThumbnail is true, it behaves the same way as MaxImageSize but for thumbnail images.                                                                                                                                             | 200                 |
 | MongooseConnection | Object  | Only needed if the mongoose connection was created using mongoose.connect().                                                                                                                    | require('mongoose') |
@@ -70,7 +69,7 @@ The constructor uses the following parameters:
 
 **\* Note**: Even if an image is already smaller then the size specified it will be compressed to take up less space. If null is given as value no resizing or compressing will be done.
 
-<a name="schemasSection"></a>
+<a name="schemas"></a>
 ## Schemas
 Robogo is a solid base for you to build upon automated processes. For this you can provide some additional information in your schemas, that you can use later. 
 
@@ -123,34 +122,36 @@ module.exports = mongoose.model('User', UserSchema) // Export the model so that 
 
 
 <br></br>
-<a name="fieldaccessSection"></a>
+<a name="field-access"></a>
 ## Field access
 Most of the time we want to make differences between users in the sense of who can see or modify the data in the database. Robogo provides an easy to use system that makes it possible for us to **manage accesses on every field of every document**.
 
-For this to work an express.js middleware has to add an access level number to the req object (as **req.accesslevel**) of every request. If this is not present the accesslevel of the request will be set to 0 by default. We must also include some special attributes for the fields of our schemas, as described in the [Schemas](#schemasSection) chapter. 
+For this to work an express.js middleware has to add an access level number to the req object (as **req.accesslevel**) of every request. If this is not present the accesslevel of the request will be set to 0 by default. We must also include some special attributes for the fields of our schemas, as described in the [Schemas](#schemas) chapter. 
 
-[Read routes](#readRoutes) will scan trough the results of the database query and remove every field that has a higher **minReadAccess** then the provided accesslevel in the req object. So if a field requires a minReadAccess of 100 then a user with an accesslevel of 50 will get the field removed from the results. 
+[Read routes](#read-routes) will scan trough the results of the database query and remove every field that has a higher **minReadAccess** than the provided accesslevel in the req object. So if a field requires a minReadAccess of 100 then a user with an accesslevel of 50 will get the field removed from the results. 
 
-In the case of [Create](#createRoutes) and [Update](#updateRoutes) routes the **minWriteAccess** will matter mostly. Fields that have a higher minWriteAccess then the provided accesslevel will be removed before trying to save them in the database. This will cause a mongoose error, when a required field is removed, so only those will be able to create documents who have a high enough accesslevel to modify every required field of a model. [Create routes](#createRoutes) also use minReadAcces as they send back the result of the operation to the client as response.
+In the case of [Create](#create-routes) and [Update](#update-routes) routes the **minWriteAccess** will matter mostly. Fields that have a higher minWriteAccess than the provided accesslevel will be removed before trying to save them in the database. This will cause a mongoose error, when a required field is removed, so only those will be able to create documents who have a high enough accesslevel to modify every required field of a model. [Create routes](#create-routes) also use minReadAcces as they send back the result of the operation to the client as response.
 
-If someone is trying to delete a document with a field with greater minWriteAccess then the users accesslevel, the request will fail and the 'EPERM' message will be sent back.
+If someone is trying to delete a document with a field with a greater minWriteAccess than the user's accesslevel using the [Delete routes](#delete-routes), the request will fail and the 'EPERM' message will be sent back.
+
+Field accesses will also be taken in count, when the '/schema/:model' or the '/fields/:model' [Special routes](#special-routes) are used. If a field has a greater minReadAccess than the the provided accesslevel, then it will be removed from the response.
 
 ### Requirements and disabling
 
-Disabling access checking can make requests a bit faster (~150ms when reading 14.000 bigger documents). This can be done globaly in the [constructor](#installSection), but you can also disable (or enable) access checking on a per request basis, by appending a 'checkAccess' property in an express middleware to the req object (like req.checkAccess) and setting it to false (or true).
+Disabling access checking can make requests a bit faster (~150ms when reading 14.000 bigger documents). This can be done globaly in the [constructor](#getting-started), but you can also disable (or enable) access checking on a per request basis, by appending a 'checkAccess' property in an express middleware to the req object (like req.checkAccess) and setting it to false (or true).
 
 Robogo tries to optimize its requests, so access checking will only take place when at least **one** of the following requirements is true for a model:
 
- * has at least one field with a minReadAccess (in case of reading) or minWriteAccess (in case of writing) attribute higher then the accesslevel of the request (req.accesslevel)
+ * has at least one field with a minReadAccess (in case of reading) or minWriteAccess (in case of writing) attribute higher than the accesslevel of the request (req.accesslevel)
  * has at least one field that uses the [mongoose-autopopulate](https://www.npmjs.com/package/mongoose-autopopulate) package and has a reference to a model that fulfills the first point.
 
 
 <br></br>
-<a name="filesSection"></a>
+<a name="working-with-files"></a>
 ## Working with files
-Robogo can help greatly with file handling. Files sent to its '/fileupload' path will be saved automatically into the folder given to the constructor as the 'FileDir' parameter. Images can be compressed and resized with no hassle, it can even create thumbnail images if needed.  These functionalities can be configured in the constructor of robogo. You can get more information on them in the [Getting started](#installSection) chapter. The [Routes - File](#fileRoutes) section describes the routes that can be used to create new or delete and access the uploaded files.
+Robogo can help greatly with file handling. Files sent to its '/fileupload' path will be saved automatically into the folder given to the constructor as the 'FileDir' parameter. Images can be compressed and resized with no hassle, it can even create thumbnail images if needed.  These functionalities can be configured in the constructor of robogo. You can get more information on them in the [Getting started](#getting-started) chapter. The [Routes - File](#file-routes) section describes the routes that can be used to create new or delete and access the uploaded files.
 
-Robogo  creates a special **RoboFile** model to store information about the files it handles.  This special model can not be handled by robogos default routes. Every time a file is uploaded an instance of this model is saved into the database containing the properties of the file. You can reference this document in your documents like in the example of the [Schemas](#schemasSection) chapter.
+Robogo  creates a special **RoboFile** model to store information about the files it handles.  This special model can not be handled by robogos default routes. Every time a file is uploaded an instance of this model is saved into the database containing the properties of the file. You can reference this document in your documents like in the example of the [Schemas](#schemas) chapter.
 
 The RoboFile model has the following schema:
 ```js
@@ -166,7 +167,7 @@ The RoboFile model has the following schema:
 
 
 <br></br>
-<a name="servicesSection"></a>
+<a name="services"></a>
 ## Services
 Services are just like normal express.js routes that are registered automatically by and can be reached through robogo. Every service's functions can be reached with both GET and POST methods, depending on which robogo route was used when calling it.
 
@@ -211,14 +212,14 @@ module.exports = Services
 
 
 <br></br>
-<a name="routesSection"></a>
+<a name="routes"></a>
 ## Routes
 
-In this section you can find the description of the endpoints that are created by robogo. All of the routes are prefixed with the path that was used, when [the routes were registered in Express using the GenerateRoutes method](#installSection). So in this example '/api'.
+In this section you can find the description of the endpoints that are created by robogo. All of the routes are prefixed with the path that was used, when [the routes were registered in Express using the GenerateRoutes method](#getting-started). So in this example '/api'.
 
 It is recommended to use this package's frontend helper [robolt](https://www.npmjs.com/package/robolt), that will hide the complexity of the routes.
 
-<a name="createRoutes"></a>
+<a name="create-routes"></a>
 ### Create routes
 
 #### /create/:model
@@ -234,7 +235,7 @@ An object that matches the given model's schema. The whole req.body should be th
 
 
 <br></br>
-<a name="readRoutes"></a>
+<a name="read-routes"></a>
 ### Read routes
 
 #### /read/:model
@@ -318,7 +319,7 @@ axios.get('/api/search/User', {
 
 
 <br></br>
-<a name="updateRoutes"></a>
+<a name="update-routes"></a>
 ### Update routes
 
 #### /update/:model
@@ -335,7 +336,7 @@ The whole body should be an object with an _id field containing the ObjectId of 
 
 
 <br></br>
-<a name="deleteRoutes"></a>
+<a name="delete-routes"></a>
 ### Delete routes
 
 #### /delete/:model/:id
@@ -350,7 +351,7 @@ axios.delete('/api/delete/User/507f191e810c19729de860ea')
 
 
 <br></br>
-<a name="serviceRoutes"></a>
+<a name="service-routes"></a>
 ### Service routes
 
 There are two types of services: getters and runners. The difference between the two is just the HTTP-method they are using. Runners use POST so you can send data more easily and not get the results cached. Getters use GET so you can get the results cached if needed.
@@ -378,13 +379,13 @@ axios.get('/api/getter/user/clearFriends')
 
 
 <br></br>
-<a name="fileRoutes"></a>
+<a name="file-routes"></a>
 ### File routes
-The following routes are only available, if the 'FileDir' parameter was provided in the [constructor](#installSection).
+The following routes are only available, if the 'FileDir' parameter was provided in the [constructor](#getting-started).
 
 #### /fileupload
 >Uploads a given file, and generates a unique name for it. We must send the file as multipart/form-data.
-If the file is an image and the 'CreateThumbnail' option was set to true in the [constructor](#installSection) it will generate a thumbnail for it. Thumbnail images will have names like 'fileUniqueName_thumbnail.jpg'.
+If the file is an image and the 'CreateThumbnail' option was set to true in the [constructor](#getting-started) it will generate a thumbnail for it. Thumbnail images will have names like 'fileUniqueName_thumbnail.jpg'.
 * Method: POST
 * Returns: Object (RoboFile document)
 
@@ -410,11 +411,11 @@ axios.delete(`/api/filedelete/:id`)
 ```
 
 <br></br>
-<a name="specialRoutes"></a>
+<a name="special-routes"></a>
 ### Special routes
 
 ####  /schema/:model
->Special route that returns everything there is to know about the given model's schema  (its fields and their properties).
+> Returns a tree-like structure of the fields and their properties for the given model. This is great for creating automated interfaces.
 * Method: GET
 * Returns: Object
 
@@ -480,10 +481,10 @@ Params:
 
 
 <br></br>
-<a name="middlewareSection"></a>
+<a name="adding-custom-middlewares"></a>
 ## Adding custom middlewares
 
-If needed, we can extend the functionalities of the default routes of robogo with middlewares. Middleware functions **have to return a Promise**. This Promise should be resolved when the middleware is done with its work and the route should continue running. Rejecting the Promise will stop the route from continuing and (if the 'ShowLogs' parameter of the [constructor](#installSection) was set to true) the value given to the reject function will be written to the console. In this case **do not forget** to send a response from inside the middleware. Every middleware's 'this' context is the robogo instance it was registered in.
+If needed, we can extend the functionalities of the default routes of robogo with middlewares. Middleware functions **have to return a Promise**. This Promise should be resolved when the middleware is done with its work and the route should continue running. Rejecting the Promise will stop the route from continuing and (if the 'ShowLogs' parameter of the [constructor](#getting-started) was set to true) the value given to the reject function will be written to the console. In this case **do not forget** to send a response from inside the middleware. Every middleware's 'this' context is the robogo instance it was registered in.
 
 There are four categories of routes that can have middlewares:
   * **C**(reat)
