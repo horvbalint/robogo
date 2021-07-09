@@ -32,7 +32,7 @@ class Robogo {
     this.ModelsHighestAccesses  = {}
     this.Services               = {}
     this.Middlewares            = {}
-    this.Operations             = ['C', 'R', 'U', 'D']
+    this.Operations             = ['C', 'R', 'U', 'D', 'S']
     this.Timings                = ['after', 'before']
     this.SchemaDir              = SchemaDir
     this.ServiceDir             = ServiceDir
@@ -676,19 +676,20 @@ class Robogo {
     })
     // CREATE routes
     Router.post( '/create/:model', (req, res) => {
-      let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
-      let checkWriteAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].write > req.accesslevel
-
       function mainPart(req, res) {
+        let checkWriteAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].write > req.accesslevel
+        
         if(checkWriteAccess)
           this.RemoveDeclinedFieldsFromObject(req.params.model, req.body, req.accesslevel, 'minWriteAccess')
-  
+        
         const Model = this.MongooseConnection.model(req.params.model)
         const ModelInstance = new Model(req.body)
         return ModelInstance.save()
       }
-
+      
       async function responsePart(req, res, result) {
+        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+
         if(checkReadAccess)
           this.RemoveDeclinedFieldsFromObject(req.params.model, result, req.accesslevel)
   
@@ -702,18 +703,18 @@ class Robogo {
     // READ routes
     // these routes will use "lean" so that results are not immutable
     Router.get( '/read/:model', (req, res) => {
-      let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
-
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
-          .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
-          .lean({ autopopulate: true, virtuals: true, getters: true })
-          .sort( JSON.parse(req.query.sort || '{}') )
-          .skip( Number(req.query.skip) || 0 )
-          .limit( Number(req.query.limit) || null )
+        .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
+        .lean({ autopopulate: true, virtuals: true, getters: true })
+        .sort( JSON.parse(req.query.sort || '{}') )
+        .skip( Number(req.query.skip) || 0 )
+        .limit( Number(req.query.limit) || null )
       }
-
+      
       async function responsePart(req, res, results) {
+        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+
         if(checkReadAccess)
           this.RemoveDeclinedFields(req.params.model, results, req.accesslevel)
 
@@ -724,15 +725,15 @@ class Robogo {
     }) 
 
     Router.get( '/get/:model/:id', (req, res) => {
-      let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
-
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
-          .findOne({_id: req.params.id}, req.query.projection)
-          .lean({ autopopulate: true, virtuals: true, getters: true })
+        .findOne({_id: req.params.id}, req.query.projection)
+        .lean({ autopopulate: true, virtuals: true, getters: true })
       }
-
+      
       async function responsePart(req, res, result) {
+        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+
         if(checkReadAccess)
           this.RemoveDeclinedFieldsFromObject(req.params.model, result, req.accesslevel)
 
@@ -743,15 +744,15 @@ class Robogo {
     })
 
     Router.get( '/search/:model', (req, res) => {
-      let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
-
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
-          .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
-          .lean({ autopopulate: true, virtuals: true, getters: true })
+        .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
+        .lean({ autopopulate: true, virtuals: true, getters: true })
       }
-
+      
       async function responsePart(req, res, results) {
+        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+
         if(checkReadAccess)
           this.RemoveDeclinedFields(req.params.model, results, req.accesslevel)
         
@@ -875,56 +876,68 @@ class Robogo {
 
     // SPECIAL routes
     Router.get( '/schema/:model', (req, res) => {
-      if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
-        return res.status(500).send('MISSING MODEL')
+      function mainPart(req, res) {
+        let schema = this.DecycledSchemas[req.params.model]
+        return Promise.resolve(schema)
+      }
+      
+      async function responsePart(req, res, result) {
+        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+
+        if(checkReadAccess)
+          result = this.RemoveDeclinedFieldsFromSchema(result, req.accesslevel)
+
+        res.send(result)
       }
 
-      let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
-
-      let schema = this.DecycledSchemas[req.params.model]
-      if(checkReadAccess)
-        schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accesslevel)
-
-      res.send(schema)
+      this.CRUDRoute(req, res, mainPart, responsePart, 'S')
     })
 
     Router.get( '/fields/:model', (req, res) => {
-      if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
-        return res.status(500).send('MISSING MODEL')
+      function mainPart(req, res) {
+        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+        let schema = this.DecycledSchemas[req.params.model]
+
+        if(checkReadAccess)
+          schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accesslevel)
+        
+        let fields = this.GetFields(schema, req.query.depth)
+        return Promise.resolve(fields)
       }
 
-      let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+      async function responsePart(req, res, result) {
+        res.send(result)
+      }
 
-      let schema = this.DecycledSchemas[req.params.model]
-      if(checkReadAccess)
-        schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accesslevel)
-
-      res.send(this.GetFields(schema))
+      this.CRUDRoute(req, res, mainPart, responsePart, 'S')
     })
 
     Router.get( '/count/:model', (req, res) => {
-      if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
-        return res.status(500).send('MISSING MODEL')
+      function mainPart(req, res) {
+        if(!req.query.filter) req.query.filter = '{}'
+
+        return this.MongooseConnection.model(req.params.model)
+          .countDocuments(JSON.parse(req.query.filter))
       }
 
-      if(!req.query.filter) req.query.filter = '{}'
+      async function responsePart(req, res, result) {
+        res.send(result)
+      }
 
-      this.MongooseConnection.model(req.params.model).countDocuments(JSON.parse(req.query.filter), (err, count) => {
-        if(err) res.status(500).send(err)
-        else res.send({count})
-      })
+      this.CRUDRoute(req, res, mainPart, responsePart, 'S')
     })
 
     Router.get( '/searchkeys/:model', (req, res) => {
-      if(!this.Schemas[this.BaseDBString][req.params.model]) {
-        this.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
-        return res.status(500).send('MISSING MODEL')
+      function mainPart(req, res) {
+        let keys = this.GetSearchKeys(req.params.model, req.query.depth)
+        return Promise.resolve(keys)
       }
 
-      res.send(this.GetSearchKeys(req.params.model, req.query.depth))
+      async function responsePart(req, res, result) {
+        res.send(result)
+      }
+
+      this.CRUDRoute(req, res, mainPart, responsePart, 'S')
     })
     // ------------
 
