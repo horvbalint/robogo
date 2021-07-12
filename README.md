@@ -126,7 +126,7 @@ module.exports = mongoose.model('User', UserSchema) // Export the model so that 
 ## Field access
 Most of the time we want to make differences between users in the sense of who can see or modify the data in the database. Robogo provides an easy to use system that makes it possible for us to **manage accesses on every field of every document**.
 
-For this to work an express.js middleware has to add an access level number to the req object (as **req.accesslevel**) of every request. If this is not present the accesslevel of the request will be set to 0 by default. We must also include some special attributes for the fields of our schemas, as described in the [Schemas](#schemas) chapter. 
+For this to work an express.js or [robogo middleware](#adding-custom-middlewares) has to add an access level number to the req object (as **req.accesslevel**) of every request. If this is not present the accesslevel of the request will be set to 0 by default. We must also include some special attributes for the fields of our schemas, as described in the [Schemas](#schemas) chapter. 
 
 [Read routes](#read-routes) will scan trough the results of the database query and remove every field that has a higher **minReadAccess** than the provided accesslevel in the req object. So if a field requires a minReadAccess of 100 then a user with an accesslevel of 50 will get the field removed from the results. 
 
@@ -138,7 +138,7 @@ Field accesses will also be taken in count, when the '/schema/:model' or the '/f
 
 ### Requirements and disabling
 
-Disabling access checking can make requests a bit faster (~150ms when reading 14.000 bigger documents). This can be done globaly in the [constructor](#getting-started), but you can also disable (or enable) access checking on a per request basis, by appending a 'checkAccess' property in an express middleware to the req object (like req.checkAccess) and setting it to false (or true).
+Disabling access checking can make requests a bit faster (~150ms when reading 14.000 bigger documents). This can be done globaly in the [constructor](#getting-started), but you can also disable (or enable) access checking on a per request basis, by appending a 'checkAccess' property in an express.js or [robogo middleware](#adding-custom-middlewares) to the req object (like req.checkAccess) and setting it to false (or true).
 
 Robogo tries to optimize its requests, so access checking will only take place when at least **one** of the following requirements is true for a model:
 
@@ -173,7 +173,7 @@ Services are just like normal express.js routes that are registered automaticall
 
 Services are created by creating separate .js files that are containing one or more service functions.  These files should export an object containing the service functions of the service. Service files should then be put in a single folder and this folder should be registered in robogo by giving the path of it to the constructor as the 'ServiceDir' parameter.
 
-Service functions are identified and called by providing their service name (name of the .js file they are in) and their function name. All service functions must return a Promise whose resolved value will be sent back as a response to the client. Rejecting the Promise will send the rejected error back to the client, with a status code of 500. Service functions can use three parameters, that are in order:
+Service functions are identified and called by providing their service name (name of the .js file they are in) and their function name. All service functions must return a Promise whose resolved value will be sent back as a response to the client. Rejecting the Promise will send the rejected error back to the client, with a status code of 500. Every service's 'this' context is the robogo instance it was registered in. Service functions can use three parameters, that are in order:
   * **req**: Request object (from Express.js)
   * **res**: Response object (from Express.js)
   * **data**: req.body or req.query depending on the HTTP method used - for easy access.
@@ -247,7 +247,7 @@ An object that matches the given model's schema. The whole req.body should be th
 // an example using the axios library
 axios.get('/api/read/User', {
   params: {
-	  filter: {Chandler: {$in: friends}},
+	  filter: {friends: 'Chandler'},
 	  projection: ['username', 'friends'],
 	  sort: {username: 1},
 	  skip: 10,
@@ -259,7 +259,7 @@ axios.get('/api/read/User', {
 ##### Params:
 | key | type | description | example |
 |:-|:-:|:-:|:-:|
-| filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {Chandler: {$in: friends}} |
+| filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {friends: 'Chandler'} |
 | projection | Array\<String\> | Fields to include in results. Uses MongoDB [projection](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.html). | ['username', 'friends'] |
 | sort | Object | [Mongodb sort](https://docs.mongodb.com/manual/reference/method/cursor.sort/index.html) | {age : 1} |
 | skip | Number | The number of documents to skip in the results set. | 10 |
@@ -297,7 +297,7 @@ axios.get('/api/get/User/507f191e810c19729de860ea', {
 // an example using the axios library
 axios.get('/api/search/User', {
   params: {
-    filter: {Chandler: {$in: friends}},
+    filter: {friends: 'Chandler'},
     projection: ['username', 'friends'],
     threshold: 0.4,
     keys: ['username'],
@@ -310,7 +310,7 @@ axios.get('/api/search/User', {
 ##### Params:
 | key | type | description | example |
 |:-|:-:|:-:|:-:|
-| filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {Chandler: {$in: friends}} |
+| filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {friends: 'Chandler'} |
 | projection | Array\<String\> | Fields to include in results. Uses MongoDB [projection](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.html). | ['username', 'friends'] |
 | threshold | Number | [Fuse.js](https://www.npmjs.com/package/fuse.js) threshold, defaults to 0.4 | 0.6 |
 | keys | Array\<String\> | Keys of the document that are searched in. If no keys are provided keys will be automatically picked from the schema | ['username'] |
@@ -433,8 +433,17 @@ axios.get('/api/schema/User')
 
 ```javascript
 // an example using the axios library
-axios.get('/api/fields/User')
+axios.get('/api/fields/User', {
+  params: {
+    depth: 0
+  }
+})
 ```
+
+##### Params:
+| key | type | description | example |
+|:-|:-:|:-:|:-:|
+| depth | Number | Limits the depth of the fields returned. Starts from 0. | 0 |
 
 
 <br></br>
@@ -447,7 +456,7 @@ axios.get('/api/fields/User')
 // an example using the axios library
 axios.get('/api/count/User', {
   params: {
-    filter: {Chandler: {$in: friends}},
+    filter: {friends: 'Chandler'},
   }
 })
 ```
@@ -455,7 +464,7 @@ Params:
 
 | key | type | description | example |
 |:-|:-:|:-:|:-:|
-| filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {Chandler: {$in: friends}} |
+| filter | Object | [Mongodb query](https://docs.mongodb.com/manual/reference/method/db.collection.find/index.htmls) | {friends: 'Chandler'} |
 
 
 <br></br>
@@ -491,6 +500,7 @@ There are four categories of routes that can have middlewares:
   * **R**(ead)
   * **U**(pdate)
   * **D**(elete)
+  * **S**(pecial)
 
 Each route-category can have a single 'before' and an 'after' middleware.
 
