@@ -693,6 +693,7 @@ class Robogo {
       }
       
       async function responsePart(req, res, result) {
+        result = result.toObject() // this is needed, because mongoose returns an immutable object by default
         let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
 
         if(checkReadAccess)
