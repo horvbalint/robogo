@@ -936,7 +936,7 @@ class Robogo {
       }
 
       async function responsePart(req, res, result) {
-        res.send(result)
+        res.send(String(result))
       }
 
       this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
