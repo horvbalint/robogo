@@ -451,7 +451,7 @@ axios.get('/api/fields/User', {
 #### /count/:model
 >Returns the count of documents for the given model that are matched by the given filter.
 * Method: GET
-* Returns: Array\<Object\>
+* Returns: Number
 
 ```javascript
 // an example using the axios library
