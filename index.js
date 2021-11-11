@@ -5,6 +5,7 @@ const Fuse          = require('fuse.js')
 const path          = require('path')
 const fs            = require('fs')
 const RoboFileModel = require('./schemas/RoboFile')
+const Logger        = require('./utils/logger')
 
 const Router = express.Router()
 
@@ -20,9 +21,9 @@ class Robogo {
     CreateThumbnail = false,
     MaxThumbnailSize = 200,
     CheckAccess = true,
-    ShowLogs = true,
-    ShowWarnings = true,
     ShowErrors = true,
+    ShowWarnings = true,
+    ShowLogs = true,
   }) {
     this.MongooseConnection     = MongooseConnection
     this.BaseDBString           = String(MongooseConnection.connections[0]._connectionString)
@@ -44,9 +45,7 @@ class Robogo {
     this.CreateThumbnail        = CreateThumbnail
     this.MaxThumbnailSize       = MaxThumbnailSize
     this.CheckAccess            = CheckAccess
-    this.ShowLogs               = ShowLogs
-    this.ShowWarnings           = ShowWarnings
-    this.ShowErrors             = ShowErrors
+    this.Logger                 = new Logger({ShowErrors, ShowWarnings, ShowLogs})
     this.Upload                 = null
 
     if(FileDir)
@@ -390,7 +389,7 @@ class Robogo {
       }
       
       if(givenType != 'Mixed')
-        this.LogMixedType(modelName, fieldKey, field)
+        this.Logger.LogMixedType(modelName, fieldKey, field)
     }
 
     // if the field has a ref, we check if it is a string or a model
@@ -465,6 +464,7 @@ class Robogo {
    * @param {String} [authField='minReadAccess']  
    */
   RemoveDeclinedFieldsFromObject(fields, object, accesslevel = 0, authField = 'minReadAccess') {
+    if(!object) return
     if(typeof fields == 'string') fields = this.Schemas[this.BaseDBString][fields] // if model name was given, then we get the models fields 
 
     for(let field of fields) {
@@ -565,7 +565,7 @@ class Robogo {
   }
 
   /**
-   * Resizes an image at the sourcePath to the given size and saves it to the destintaionPath.
+   * Resizes an image at the sourcePath to the given size and saves it to the destinationPath.
    * @param {String} sourcePath 
    * @param {Number} size 
    * @param {String} destinationPath 
@@ -597,15 +597,15 @@ class Robogo {
     let errorOccurrence =  `adding the custom middleware '${modelName} -> ${operation} -> ${timing}'`
 
     if(!this.Middlewares[modelName]) {
-      this.LogMissingModel(modelName, errorOccurrence)
+      this.Logger.LogMissingModel(modelName, errorOccurrence)
       throw new Error(`MISSING MODEL: ${modelName}`)
     }
     if(!this.Operations.includes(operation)) {
-      this.LogUnknownOperation(operation,  errorOccurrence)
+      this.Logger.LogUnknownOperation(operation,  errorOccurrence)
       throw new Error(`Middleware: Operation should be one of: ${this.Operations}`)
     }
     if(!this.Timings.includes(timing)) {
-      this.LogUnknownTiming(timing,  errorOccurrence)
+      this.Logger.LogUnknownTiming(timing,  errorOccurrence)
       throw new Error(`Middleware: Timing should be one of: ${this.Timings}`)
     }
 
@@ -623,7 +623,7 @@ class Robogo {
   CRUDSRoute(req, res, mainPart, responsePart, operation) {
     // if the model is unkown send an error
     if(!this.Schemas[this.BaseDBString][req.params.model]) {
-      this.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
+      this.Logger.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
       return res.status(500).send('MISSING MODEL')
     }
 
@@ -638,11 +638,11 @@ class Robogo {
                 responsePart.call(this, req, res, result)
                   .catch( err => {res.status(500).send(err); console.error(err)} )
               })
-              .catch( message => this.LogMiddlewareMessage(req.params.model, operation, 'after', message) )
+              .catch( message => this.Logger.LogMiddlewareMessage(req.params.model, operation, 'after', message) )
           })
           .catch( err => {res.status(500).send(err); console.error(err)} )
       })
-      .catch( message => this.LogMiddlewareMessage(req.params.model, operation, 'before', message) )
+      .catch( message => this.Logger.LogMiddlewareMessage(req.params.model, operation, 'before', message) )
   }
 
   /**
@@ -653,11 +653,11 @@ class Robogo {
    */
   ServiceRoute(req, res, paramsKey) {
     if(!this.Services[req.params.service]) {
-      this.LogMissingService(req.params.service, `serving the route: '${req.method} ${req.path}'`)
+      this.Logger.LogMissingService(req.params.service, `serving the route: '${req.method} ${req.path}'`)
       return res.status(500).send('MISSING SERVICE')
     }
     if(!this.Services[req.params.service][req.params.fun]) {
-      this.LogMissingServiceFunction(req.params.service, req.params.fun, `serving the route: '${req.method} ${req.path}'`)
+      this.Logger.LogMissingServiceFunction(req.params.service, req.params.fun, `serving the route: '${req.method} ${req.path}'`)
       return res.status(500).send('MISSING SERVICE FUNCTION')
     }
 
@@ -965,139 +965,6 @@ class Robogo {
     // ------------
 
     return Router
-  }
-
-  // The functions below are the logs of robogo, they are formatted using bash sequences.
-  // Colors and formattings can be found at: https://misc.flogisoft.com/bash/tip_colors_and_formatting
-  // \e[ should be changed to \x1b[ to work with Node.js
-  LogMessage(type, occurrence, title, description) {
-    let mainTitle, color
-
-    if(type == 'error') {
-      if(!this.ShowErrors) return
-      mainTitle = 'ROBOGO ERROR'
-      color = 91
-    }
-    else if(type == 'warning') {
-      if(!this.ShowWarnings) return
-      mainTitle = 'ROBOGO WARNING'
-      color = 93
-    }
-    else if(type == 'log') {
-      if(!this.ShowLogs) return
-      mainTitle = 'ROBOGO LOG'
-      color = 34
-    }
-
-    console.log(`\x1b[${color}m\x1b[7m\x1b[1m%s\x1b[0m`, `\n ${mainTitle} `)
-    console.log(`\x1b[${color}m%s\x1b[0m`, `occurred while ${occurrence}.\n`)
-    console.log(`\x1b[${color}m\x1b[1m%s\x1b[0m`, title)
-    console.log(`\x1b[${color}m%s\x1b[0m`, description, '\n')
-  }
-
-  LogMissingModel(modelName, occurrence) {
-    let title = `MISSING MODEL: '${modelName}'`
-    let description = `
-There is no model registered with the name '${modelName}'.
-This is most likely just a typo.
-
-If the name is correct check, if:
-  • the file containg the model is in the folder which was given to robogo
-  • the file is exporting the model, so robogo can import it`
-
-    this.LogMessage('error', occurrence, title, description)
-  }
-
-  LogMissingService(serviceName, occurrence) {
-    let title = `MISSING SERVICE: '${serviceName}'`
-    let description = `
-There is no service registered with the name '${serviceName}'.
-This is most likely just a typo.
-
-If the name is correct check, if:
-  • the file containg the service is in the folder which was given to robogo
-  • the file is exporting the service, so robogo can import it`
-
-    this.LogMessage('error', occurrence, title, description)
-  }
-
-  LogMissingServiceFunction(serviceName, functionName, occurrence) {
-    let title = `MISSING SERVICE FUNCTION: '${functionName}'`
-    let description = `
-There is no function in the service '${serviceName}' with the name '${functionName}'.
-This is most likely just a typo.
-
-If the name is correct check, if:
-  • the '${serviceName}' service is the one containing the function`
-
-    this.LogMessage('error', occurrence, title, description)
-  }
-
-  LogUnknownOperation(operation, occurrence) {
-    let title = `UNKNOWN OPERATION: '${operation}'`
-    let description = `
-No operation exists with the name '${operation}'.
-Operation should be one of:
-  • 'C'
-  • 'R'
-  • 'U'
-  • 'D'`
-
-    this.LogMessage('error', occurrence, title, description)
-  }
-
-  LogUnknownTiming(timing, occurrence) {
-    let title = `UNKNOWN TIMING: '${timing}'`
-    let description = `
-No timing exists with the name '${timing}'.
-Timing should be one of:
-  • 'before'
-  • 'after'`
-
-    this.LogMessage('error', occurrence, title, description)
-  }
-
-  LogMixedType(modelName, key, field) {
-    let occurrence = `processing the '${modelName}' model`
-    let title = `MIXED TYPE FIELD: '${key}'`
-
-    let description =  `
-Fields in '${key}' won\'t be access checked and they won\'t appear in the robogo schema!
-If you need those functionalities use the following syntax:
-
-${key}: {
-  type: new mongoose.Schema({
-    key: value
-  }),`
-
-    if(field.name) description += `\n  name: ${field.name},`
-    if(field.description) description += `\n  description: ${field.description},`
-    description += `\n  ...
-}
-
-Instead of:
-
-${key}: {
-  type: {
-    key: value
-  },`
-    if(field.name) description += `\n  name: ${field.name},`
-    if(field.description) description += `\n  description: ${field.description},`
-    description += `\n  ...
-}`
-
-    this.LogMessage('warning', occurrence, title, description)
-  }
-
-  LogMiddlewareMessage(modelName, operation, timing, message) {
-    let occurrence = `running the custom '${modelName} -> ${operation} -> ${timing}' middleware`
-    let title = 'REQUEST STOPPED'
-
-    let description = `
-The custom '${modelName} -> ${operation} -> ${timing}' middleware stopped a request.
-Given reason: '${message}'`
-
-    this.LogMessage('log', occurrence, title, description)
   }
 }
 
