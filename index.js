@@ -309,10 +309,8 @@ class Robogo {
           isArray: false,
           type: 'Object',
           required: false,
-          ref:  null,
           name: fieldKey,
           description: null,
-          default: null,
           minReadAccess: 0,
           minWriteAccess: 0,
           subfields: []
@@ -337,32 +335,35 @@ class Robogo {
       isArray: fieldDescriptor.instance == 'Array',
       type: fieldDescriptor.instance,
       required: fieldDescriptor.options.required || false,
-      ref: fieldDescriptor.options.ref || null,
       name: fieldDescriptor.options.name || null,
       description: fieldDescriptor.options.description || null,
-      default: fieldDescriptor.options.default || null,
       minReadAccess: fieldDescriptor.options.minReadAccess || 0,
       minWriteAccess: fieldDescriptor.options.minWriteAccess || 0,
-      autopopulate: fieldDescriptor.options.autopopulate || false
     }
     if(fieldDescriptor.options.marked) field.marked = true
     if(fieldDescriptor.options.hidden) field.hidden = true
+    if(fieldDescriptor.options.ref) field.ref = fieldDescriptor.options.ref
+    if(fieldDescriptor.options.enum) field.enum = fieldDescriptor.options.enum
+    if(fieldDescriptor.options.autopopulate) field.autopopulate = fieldDescriptor.options.autopopulate
+    if(fieldDescriptor.options.hasOwnProperty('default')) field.default = fieldDescriptor.options.default
 
     // if the field is an array we extract the informations of the type it holds
     if(field.isArray) {
       const Emb = fieldDescriptor.$embeddedSchemaType
 
+      field.type = Emb.instance || 'Object'
+      field.name = field.name || Emb.options.name || null
+      field.description = field.description || Emb.options.description || null
+      field.minReadAccess = Math.max(field.minReadAccess, (Emb.options.minReadAccess || 0))
+      field.minWriteAccess = Math.max(field.minWriteAccess, (Emb.options.minWriteAccess || 0))
+
       if(!Emb.instance) field.subfields = []
       if(Emb.options.marked) field.marked = true
       if(Emb.options.hidden) field.hidden = true
-      field.type = Emb.instance || 'Object'
-      field.ref = Emb.options.ref || field.ref
-      field.name = field.name || Emb.options.name || null
-      field.description = field.description || Emb.options.description || null
-      field.default = field.default || Emb.options.default || null
-      field.minReadAccess = Math.max(field.minReadAccess, (Emb.options.minReadAccess || 0))
-      field.minWriteAccess = Math.max(field.minWriteAccess, (Emb.options.minWriteAccess || 0))
-      field.autopopulate = Emb.options.autopopulate
+      if(Emb.options.ref) field.ref = Emb.options.ref
+      if(Emb.options.enum) field.enum = Emb.options.enum
+      if(Emb.options.hasOwnProperty('default') && !field.default) field.default = Emb.options.default
+      if(Emb.options.autopopulate) field.autopopulate = Emb.options.autopopulate
     }
 
     if(field.type == 'ObjectID') field.type = 'Object'
