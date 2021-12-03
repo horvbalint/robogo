@@ -544,8 +544,12 @@ class Robogo {
     let extension     = req.file.originalname.split('.').pop()
     let filePath      = `${req.file.filename}.${extension}` // the image will be saved with the extension attached
 
+    let newSize = req.file.size // this will be overwritten with the size after the resizing
     this.resizeImageTo(multerPath, this.MaxImageSize, `${multerPath}.${extension}`) // resizes and copies the image
-      .then( () => {
+      .then( size => {
+        if(size) // if 'this.MaxImageSize' is set to null, then no resizing was done (and 'size' is undefined) 
+          newSize = size
+
         if(this.CreateThumbnail) //if a thumbnail is needed create one
           return this.resizeImageTo(multerPath, this.MaxThumbnailSize, `${multerPath}_thumbnail.${extension}`)
       })
@@ -553,7 +557,7 @@ class Robogo {
       .then( () => RoboFileModel.create({ // we create the RoboFile document
         name: req.file.originalname,
         path: filePath,
-        size: req.file.size,
+        size: newSize,
         extension: extension,
         isImage: true,
         ...this.CreateThumbnail && {thumbnailPath: `${req.file.filename}_thumbnail.${extension}`} // A hacky way of only append thumbnailPath to an object, when CreateThumbnail is true
@@ -582,7 +586,7 @@ class Robogo {
         })
         .toFile(destinationPath, (err, info) => {
           if(err) reject(err)
-          else resolve(info)
+          else resolve(info.size)
         })
     })
   }
