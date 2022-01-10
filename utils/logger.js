@@ -33,12 +33,15 @@ class Logger {
     console.log(`\x1b[${color}m%s\x1b[0m`, description, '\n')
   }
 
-  LogMissingModelinModel(modelName, missingModelName, fieldName, occurrence) {
-    let title = `UNKNOWN REFERENCE IN '${modelName}'`
+  LogUnknownReference(modelName, fieldKey, referencedModel, occurrence) {
+    let title = `UNKNOWN REFERENCE: '${referencedModel}'`
     let description = `
-There is an unknown model '${missingModelName}', found in the schema of the model '${modelName}' at the field '${fieldName}'.
-This might be intentional, if not, declare the missing model or remove the reference.
-`
+There is an unknown model '${referencedModel}' referenced in the field '${fieldKey}' of the model '${modelName}'.
+This might be intentional, if not, declare the missing model or check, if:
+
+  • the name of the model contains a typo
+  • the file containg the model is in the folder which was given to robogo
+  • the file is exporting the model, so robogo can import it`
 
     this.LogMessage('warning', occurrence, title, description)
   }

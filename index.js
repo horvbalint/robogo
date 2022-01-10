@@ -421,7 +421,8 @@ class Robogo {
     if(field.ref) {
       if(field.ref == 'RoboFile') return field.subfields = this.RoboFileShema // RoboFile is not stored in the "Schemas" object as it comes from this library not the user.
       if(this.Schemas[field.DBString][field.ref]) return field.subfields = this.Schemas[field.DBString][field.ref] // If the ref is known as a schema, then the fields new subfields are the fields of that schema
-      return Logger.LogMissingModelinModel( modelName, field.ref, field.name, `processing the field ${field.name} in ${modelName}`)
+
+      return this.Logger.LogUnknownReference(modelName, field.key, field.ref, `processing the field '${modelName} -> ${field.key}'`)
     }
 
     for(const fObj of field.subfields)
