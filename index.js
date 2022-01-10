@@ -55,7 +55,7 @@ class Robogo {
     if(ServiceDir) {
       for(const ServiceFile of fs.readdirSync(ServiceDir)) {
         if(!ServiceFile.endsWith('.js')) continue
-        
+
         const ServiceName = ServiceFile.replace('.js', '')
         this.Services[ServiceName] = require(`${ServiceDir}/${ServiceFile}`)
       }
@@ -68,7 +68,7 @@ class Robogo {
     this.CollectHighestAccessesOfModels()
   }
 
-  
+
   /**
    * Imports every model from "SchemaDir" and creates a robogo schema for it.
    * Also creates default middlewares for them.
@@ -95,7 +95,7 @@ class Robogo {
     for(let DBString in this.Schemas)
       for(let modelName in this.Schemas[DBString])
         for(let field of this.Schemas[DBString][modelName])
-          this.plugInFieldRef(field)
+          this.plugInFieldRef(field, modelName)
   }
 
   /**
@@ -120,7 +120,7 @@ class Robogo {
     for(let modelName in this.Schemas[this.BaseDBString]) {
       const DecycledSchema = this.CopySubfields({subfields: this.Schemas[this.BaseDBString][modelName]}) // We copy the top level of fields
       this.DecycledSchemas[modelName] = DecycledSchema.subfields // Theese new fields will be the top level of the decycled schema
-      
+
       for(let field of this.DecycledSchemas[modelName])
         this.DecycleField(field)
     }
@@ -150,7 +150,7 @@ class Robogo {
    */
   CopySubfields(field) {
     field.subfields = [...field.subfields] // copying the subfields array
-    
+
     for(let i=0; i<field.subfields.length; ++i)
       field.subfields[i] = {...field.subfields[i]} // copying the descriptor object of the subfields
 
@@ -163,12 +163,12 @@ class Robogo {
   GeneratePathSchemas() {
     for(let modelName in this.DecycledSchemas) {
       this.PathSchemas[modelName] = {}
-  
+
       for(let field of this.DecycledSchemas[modelName])
         this.GeneratePathSchema(field, this.PathSchemas[modelName])
     }
   }
-  
+
   /**
    * Recursively generates <FieldPath, Field> entries for the field given and its subfields.
    * @param {Object} field - A robogo field descriptor
@@ -177,7 +177,7 @@ class Robogo {
    */
   GeneratePathSchema(field, acc, prefix = '') {
     acc[`${prefix}${field.key}`] = field
-    
+
     if(field.subfields)
       for(let f of field.subfields)
         this.GeneratePathSchema(f, acc, `${prefix}${field.key}.`)
@@ -229,8 +229,8 @@ class Robogo {
 
   /**
    * Returns the field paths of a model that are safe to be used with fuse.js.
-   * @param {(String|Array)} schema 
-   * @param {Number} [maxDepth=Infinity] 
+   * @param {(String|Array)} schema
+   * @param {Number} [maxDepth=Infinity]
    */
   GetSearchKeys(schema, maxDepth = Infinity) {
     if(typeof schema == 'string')
@@ -257,7 +257,7 @@ class Robogo {
 
     if(!['Object', 'Date'].some(t => field.type == t) && !field.subfields) // fuse.js can not handle values that are not strings or numbers, so we don't collect those keys.
       keys.push(`${prefix}${field.key}`)
-    
+
     if(field.subfields)
       for(let f of field.subfields)
         this.GenerateSearchKeys(f, keys, maxDepth, `${prefix}${field.key}.`, depth+1)
@@ -325,7 +325,7 @@ class Robogo {
 
   /**
    * Creates a robogo field descriptor from a mongoose one.
-   * @param {String} fieldKey 
+   * @param {String} fieldKey
    * @param {Object} fieldDescriptor - A mongoose field descriptor
    */
   GenerateSchemaField(fieldKey, fieldDescriptor, modelName) {
@@ -388,7 +388,7 @@ class Robogo {
             givenType = fieldDescriptor.options.type.schemaName
         }
       }
-      
+
       if(givenType != 'Mixed')
         this.Logger.LogMixedType(modelName, fieldKey, field)
     }
@@ -400,7 +400,7 @@ class Robogo {
 
       field.DBString = isModel ? givenRef.db._connectionString : this.BaseDBString // we need to know which connection the ref model is from
       field.ref = isModel ? givenRef.modelName : givenRef
-      
+
       // if the model is from another connection, we generate a schema descriptor for it, so we can later use it as ref
       if(field.DBString != this.BaseDBString) {
         if(!this.Schemas[field.DBString]) this.Schemas[field.DBString] = {}
@@ -415,12 +415,13 @@ class Robogo {
    * Recursively plugs in the references of the given field and its subfields.
    * @param {Object} field - A robogo field descriptor
    */
-  plugInFieldRef(field) {
+  plugInFieldRef(field, modelName) {
     if(!field.ref && !field.subfields) return
 
     if(field.ref) {
       if(field.ref == 'RoboFile') return field.subfields = this.RoboFileShema // RoboFile is not stored in the "Schemas" object as it comes from this library not the user.
       if(this.Schemas[field.DBString][field.ref]) return field.subfields = this.Schemas[field.DBString][field.ref] // If the ref is known as a schema, then the fields new subfields are the fields of that schema
+      return Logger.LogMissingModelinModel( modelName, field.ref, field.name, `processing the field ${field.name} in ${modelName}`)
     }
 
     for(const fObj of field.subfields)
@@ -429,7 +430,7 @@ class Robogo {
 
   /**
    * Collects the fields of a model, which need a higher accesslevel, then given as parameter.
-   * @param {String} modelName 
+   * @param {String} modelName
    * @param {Number} [accesslevel=0]
    * @param {String} [authField='minReadAccess'] - Either 'minReadAccess' or 'minWriteAccess'
    * @param {Boolean} [excludeSubKeys=false] - Indicates whether or not only top level fields should be checked
@@ -439,16 +440,16 @@ class Robogo {
 
       if(excludeSubKeys) fieldEntries = fieldEntries.filter( ([key, field]) => !key.includes('.') )
       fieldEntries = fieldEntries.filter( ([key, field]) => field[authField] > accesslevel )
-      
+
       return fieldEntries.map(entr => entr[0])
   }
 
   /**
    * Removes every field from an array of documents, which need a  higher accesslevel, then given as parameter.
-   * @param {String} modelName 
-   * @param {Array} documents 
-   * @param {Number} [accesslevel=0] 
-   * @param {String} [authField='minReadAccess'] 
+   * @param {String} modelName
+   * @param {Array} documents
+   * @param {Number} [accesslevel=0]
+   * @param {String} [authField='minReadAccess']
    */
   RemoveDeclinedFields(modelName, documents, accesslevel = 0, authField = 'minReadAccess') {
     for(const document of documents)
@@ -461,12 +462,12 @@ class Robogo {
    * Removes every field from an object, which need a higher accesslevel, then given as parameter.
    * @param {Array|String} fields - A robogo schema descriptor or a models name
    * @param {Object} object - The object to remove from
-   * @param {Number} [accesslevel=0]  
-   * @param {String} [authField='minReadAccess']  
+   * @param {Number} [accesslevel=0]
+   * @param {String} [authField='minReadAccess']
    */
   RemoveDeclinedFieldsFromObject(fields, object, accesslevel = 0, authField = 'minReadAccess') {
     if(!object) return
-    if(typeof fields == 'string') fields = this.Schemas[this.BaseDBString][fields] // if model name was given, then we get the models fields 
+    if(typeof fields == 'string') fields = this.Schemas[this.BaseDBString][fields] // if model name was given, then we get the models fields
 
     for(let field of fields) {
       if(field[authField] > accesslevel) delete object[field.key]
@@ -494,7 +495,7 @@ class Robogo {
 
       if(field.subfields)
         newField.subfields = this.RemoveDeclinedFieldsFromSchema(field.subfields, accesslevel)
-      
+
       fields.push(newField)
     }
 
@@ -504,7 +505,7 @@ class Robogo {
   /**
    * Recursively creates field descriptors that only have those information, which can be useful on the frontend.
    * This function does NOT check field access, if that is needed please provide the result of the RemoveDeclinedFieldsFromSchema call as the first parameter.
-   * @param {(String|Array)} schema - Model name or robogo schema descriptor 
+   * @param {(String|Array)} schema - Model name or robogo schema descriptor
    * @param {Number} [maxDepth=Infinity] - Maximum reference depth
    * @param {Number} [depth=0] - This parameter should be leaved empty
    */
@@ -536,8 +537,8 @@ class Robogo {
    * It will resize the image to the specified size if needed.
    * It will create a RoboFile document for the image, with the properties of the image.
    * It will also create a thumbnail of the image if needed.
-   * @param {Object} req 
-   * @param {Object} res 
+   * @param {Object} req
+   * @param {Object} res
    */
   handleImageUpload(req, res) {
     let multerPath    = req.file.path
@@ -547,7 +548,7 @@ class Robogo {
     let newSize = req.file.size // this will be overwritten with the size after the resizing
     this.resizeImageTo(multerPath, this.MaxImageSize, `${multerPath}.${extension}`) // resizes and copies the image
       .then( size => {
-        if(size) // if 'this.MaxImageSize' is set to null, then no resizing was done (and 'size' is undefined) 
+        if(size) // if 'this.MaxImageSize' is set to null, then no resizing was done (and 'size' is undefined)
           newSize = size
 
         if(this.CreateThumbnail) //if a thumbnail is needed create one
@@ -571,13 +572,13 @@ class Robogo {
 
   /**
    * Resizes an image at the sourcePath to the given size and saves it to the destinationPath.
-   * @param {String} sourcePath 
-   * @param {Number} size 
-   * @param {String} destinationPath 
+   * @param {String} sourcePath
+   * @param {Number} size
+   * @param {String} destinationPath
    */
   resizeImageTo(sourcePath, size, destinationPath) {
     if(size == null) return fs.promises.copyFile(sourcePath, destinationPath) // if size is null, we do not resize just save it to the destination path
-    
+
     return new Promise( (resolve, reject) => {
       sharp(sourcePath)
         .resize(size, size, {
@@ -593,10 +594,10 @@ class Robogo {
 
   /**
    * Adds a middleware function to the given model.
-   * @param {String} modelName 
-   * @param {String} operation 
-   * @param {String} timing 
-   * @param {Function} middlewareFunction 
+   * @param {String} modelName
+   * @param {String} operation
+   * @param {String} timing
+   * @param {Function} middlewareFunction
    */
   addMiddleware(modelName, operation, timing, middlewareFunction) {
     let errorOccurrence =  `adding the custom middleware '${modelName} -> ${operation} -> ${timing}'`
@@ -619,11 +620,11 @@ class Robogo {
 
   /**
    * A helper function, that is a template for the CRUDS category routes.
-   * @param {Object} req 
-   * @param {Object} res 
-   * @param {Function} mainPart 
-   * @param {Function} responsePart 
-   * @param {String} operation 
+   * @param {Object} req
+   * @param {Object} res
+   * @param {Function} mainPart
+   * @param {Function} responsePart
+   * @param {String} operation
    */
   CRUDSRoute(req, res, mainPart, responsePart, operation) {
     // if the model is unkown send an error
@@ -652,9 +653,9 @@ class Robogo {
 
   /**
    * A helper function, that is a template for Service routes.
-   * @param {Obejct} req 
-   * @param {Object} res 
-   * @param {String} paramsKey 
+   * @param {Obejct} req
+   * @param {Object} res
+   * @param {String} paramsKey
    */
   ServiceRoute(req, res, paramsKey) {
     if(!this.Services[req.params.service]) {
@@ -676,7 +677,7 @@ class Robogo {
    * Generates all the routes of robogo and returns the express router.
    */
   GenerateRoutes() {
-    // Middleware that adds default values to robogo properties if they were not specified 
+    // Middleware that adds default values to robogo properties if they were not specified
     Router.use( (req, _, next) => {
       if(req.accesslevel === undefined)
         req.accesslevel = 0
@@ -690,22 +691,22 @@ class Robogo {
     Router.post( '/create/:model', (req, res) => {
       function mainPart(req, res) {
         let checkWriteAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].write > req.accesslevel
-        
+
         if(checkWriteAccess)
           this.RemoveDeclinedFieldsFromObject(req.params.model, req.body, req.accesslevel, 'minWriteAccess')
-        
+
         const Model = this.MongooseConnection.model(req.params.model)
         const ModelInstance = new Model(req.body)
         return ModelInstance.save()
       }
-      
+
       async function responsePart(req, res, result) {
         result = result.toObject() // this is needed, because mongoose returns an immutable object by default
         let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
 
         if(checkReadAccess)
           this.RemoveDeclinedFieldsFromObject(req.params.model, result, req.accesslevel)
-  
+
         res.send(result)
       }
 
@@ -724,7 +725,7 @@ class Robogo {
         .skip( Number(req.query.skip) || 0 )
         .limit( Number(req.query.limit) || null )
       }
-      
+
       async function responsePart(req, res, results) {
         let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
 
@@ -735,7 +736,7 @@ class Robogo {
       }
 
       this.CRUDSRoute(req, res, mainPart, responsePart, 'R')
-    }) 
+    })
 
     Router.get( '/get/:model/:id', (req, res) => {
       function mainPart(req, res) {
@@ -743,7 +744,7 @@ class Robogo {
         .findOne({_id: req.params.id}, req.query.projection)
         .lean({ autopopulate: true, virtuals: true, getters: true })
       }
-      
+
       async function responsePart(req, res, result) {
         let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
 
@@ -762,13 +763,13 @@ class Robogo {
         .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
         .lean({ autopopulate: true, virtuals: true, getters: true })
       }
-      
+
       async function responsePart(req, res, results) {
         let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
 
         if(checkReadAccess)
           this.RemoveDeclinedFields(req.params.model, results, req.accesslevel)
-        
+
         if(!req.query.threshold)
           req.query.threshold = 0.4
         if(!req.query.term)
@@ -781,13 +782,13 @@ class Robogo {
 
           req.query.keys = this.GetSearchKeys(schema, req.query.depth)
         }
-  
+
         const fuse = new Fuse(results, {
           includeScore: false,
           keys: req.query.keys,
           threshold: req.query.threshold
         })
-  
+
         let matched = fuse.search(req.query.term).map(r => r.item) // fuse.js's results include some other things, then the documents so we need to get them
         res.send(matched)
       }
@@ -825,7 +826,7 @@ class Robogo {
           const declinedPaths = this.GetDeclinedPaths(req.params.model, req.accesslevel, 'minWriteAccess', true)
           if(declinedPaths.length) return Promise.reject('PERMISSION DENIED')
         }
-  
+
         return this.MongooseConnection.model(req.params.model)
         .deleteOne({ _id: req.params.id })
       }
@@ -902,7 +903,7 @@ class Robogo {
         let schema = this.DecycledSchemas[req.params.model]
         return Promise.resolve(schema)
       }
-      
+
       async function responsePart(req, res, result) {
         let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
 
@@ -922,7 +923,7 @@ class Robogo {
 
         if(checkReadAccess)
           schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accesslevel)
-        
+
         let fields = this.GetFields(schema, req.query.depth)
         return Promise.resolve(fields)
       }

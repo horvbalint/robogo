@@ -33,6 +33,16 @@ class Logger {
     console.log(`\x1b[${color}m%s\x1b[0m`, description, '\n')
   }
 
+  LogMissingModelinModel(modelName, missingModelName, fieldName, occurrence) {
+    let title = `UNKNOWN REFERENCE IN '${modelName}'`
+    let description = `
+There is an unknown model '${missingModelName}', found in the schema of the model '${modelName}' at the field '${fieldName}'.
+This might be intentional, if not, declare the missing model or remove the reference.
+`
+
+    this.LogMessage('warning', occurrence, title, description)
+  }
+
   LogMissingModel(modelName, occurrence) {
     let title = `MISSING MODEL: '${modelName}'`
     let description = `
