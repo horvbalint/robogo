@@ -187,96 +187,13 @@ class Robogo {
   /**
    * Calculates the highest read and write accesses for every model and saves it to this.ModelsHighestAccesses[modelName].
    */
-  CollectHighestAccessesOfModels() { // TODO: WITH TREE AND REMOVING DUPLICAIONS
-    for(let modelName in this.DecycledSchemas) {
-      // ki kell szurni az ismetleseket es tombe kell alakitani
-      let accessGroupsTree = this.CollectHighestAccessesOfModel(modelName, {
-        subfields: this.DecycledSchemas[modelName],
-        readGroups: [],
-        writeGroups: [],
-      }) 
-      this.ModelsHighestAccesses[modelName] = {
-        read: this.createAccessGroupFromTree(accessGroupsTree.read),
-        write: this.createAccessGroupFromTree(accessGroupsTree.write)
-      }
-
-      console.log(modelName, this.ModelsHighestAccesses[modelName])
-      // Test {
-      //   read: [ '350', '250', '200', '370' ],
-      //   write: [ '350', '300', '200' ]
-      // }
-    }
-  }
-
-  /**
-   * Recursively calculates the highest read and write accesses for a model.
-   * @param {String} modelName - Name of the model
-   * @param {Object} field - A robogo field descriptor
-   */
-  CollectHighestAccessesOfModel(modelName, field) { // TODO
-    if(this.ModelsHighestAccesses[modelName]) // If this model was already calculated
-      return this.ModelsHighestAccesses[modelName] // then we return that result
-
-    if(!field.subfields || (field.ref && !field.autopopulate)) return { // if the field is a 'leaf' or it has subfields but it wont be populated, so we dont see those values, then we return our accesses
-      read: Object.fromEntries(field.readGroups.map(c => [c, {}])), // array -> object (['a', 'b, 'c'] -> {'a': {}, 'b': {}, 'c': {}})
-      write: Object.fromEntries(field.writeGroups.map(c => [c, {}])), // array -> object
-    }
-    
-    let readAccess = {}
-    let writeAccess = {}
-    let subModelName = field.ref || modelName
-    let resOfSubfields = field.subfields.map( f => this.CollectHighestAccessesOfModel(subModelName, f) ) // we calculate the results of our subfields
-
-    // we collect all the combinations of the needed access groups into an object
-    for(let nodeAccess of field.readGroups) { // a node read access-ei
-      if(!readAccess[nodeAccess]) readAccess[nodeAccess] = {}
-    }
-    
-    for(let childAccesses of resOfSubfields) { // a node gyerekei
-      this.addToEndOfTree(readAccess, childAccesses.read) // fa vegre fuzni a child accesseket
-    }
-    
-    for(let nodeAccess of field.writeGroups) { // a node write access-ei
-      if(!writeAccess[nodeAccess]) writeAccess[nodeAccess] = {}
-    }
-
-    for(let childAccesses of resOfSubfields) { // a node gyerekei
-      this.addToEndOfTree(writeAccess, childAccesses.write) // fa vegre fuzni a child accesseket
-    }
-
-    return {
-      read: readAccess, // object
-      write: writeAccess, // object
-    }
-  }
-
-  addToEndOfTree(tree, childAccesses) {
-    if(Object.keys(tree).length) { // not leaf
-      for(let node in tree)
-        this.addToEndOfTree(tree[node], childAccesses)
-    }
-    else { // leaf
-      for(let [access, subTree] of Object.entries(childAccesses)) {
-        tree[access] = {...subTree} 
-      }
-    }
-  }
-
-  // Test {
-  //   read: [ '350', '250', '200', '370' ],
-  //   write: [ '350', '300', '200' ]
-  // }
-
-  // TODO: without tree -> with sets + helper set (with the values that have occured before)
-  CollectHighestAccessesOfModels() { // TODO
+  CollectHighestAccessesOfModels() {
     for(let modelName in this.DecycledSchemas) {
       this.ModelsHighestAccesses[modelName] = this.CollectHighestAccessesOfModel(modelName, {
         subfields: this.DecycledSchemas[modelName],
-        readGroups: [],
-        writeGroups: [],
+        readGroups: [null],
+        writeGroups: [null],
       }) 
-
-      console.log(modelName, this.ModelsHighestAccesses[modelName])
     }
   }
 
@@ -290,38 +207,57 @@ class Robogo {
       return this.ModelsHighestAccesses[modelName] // then we return that result
 
     if(!field.subfields || (field.ref && !field.autopopulate)) return { // if the field is a 'leaf' or it has subfields but it wont be populated, so we dont see those values, then we return our accesses
-      read: [field.readGroups.map(a => [a])],  // ['a', 'b', 'c'] => [['a'], ['b'], ['c']]
-      write: [field.writeGroups.map(a => [a])], // ['a', 'b', 'c'] => [['a'], ['b'], ['c']]
+      read: field.readGroups.map(a => new Set([a])),
+      write: field.writeGroups.map(a => new Set([a])),
     }
     
-    let readAccess = []
-    let writeAccess = []
     let subModelName = field.ref || modelName
     let resOfSubfields = field.subfields.map( f => this.CollectHighestAccessesOfModel(subModelName, f, occurrences) ) // we calculate the results of our subfields
-
-    // we collect all the combinations of the needed access groups into an object
-    for(let nodeAccess of field.readGroups) { // a node read access-ei
-      occurrences.add(nodeAccess)
-
-      for(let child of resOfSubfields) { // childen's results
-        for(let group of child) { // access groups of child
-          for(let access of group) {
-            occurrences.add(access)
-          }
-        }
-      }
-    }
     
-    for(let nodeAccess of field.writeGroups) { // a node write access-ei
-      // if(!writeAccess[nodeAccess]) writeAccess[nodeAccess] = {}
-    }
-
+    // we collect all the combinations of the needed access groups into an object
+    let fieldReadGroups = field.readGroups.map(a => new Set([a]))
+    this.mergeChildAccessGroups(fieldReadGroups, resOfSubfields, 'read')
+    
+    let fieldWriteGroups = field.writeGroups.map(a => new Set([a]))
+    this.mergeChildAccessGroups(fieldWriteGroups, resOfSubfields, 'write')
+ 
     return {
-      read: readAccess,
-      write: writeAccess,
+      read: fieldReadGroups,
+      write: fieldWriteGroups,
     }
   }
 
+  mergeChildAccessGroups(fieldGroups, resOfSubfields, key) {
+    for(let [index, nodeAccess] of fieldGroups.entries()) { // a node read access-ei
+      for(let child of resOfSubfields) { // childen's results
+        if(child[key].some(g => [...g].every(a => nodeAccess.has(a)))) continue
+        
+        let copysNeeded = child[key].length-1
+        for(let i = 0; i < copysNeeded; ++i) {
+          fieldGroups.splice(index, 0, new Set(nodeAccess))
+        }
+
+        for(let [ind, accessGroup] of child[key].entries()) { // access groups of child
+          let target = fieldGroups[index+ind]
+          accessGroup.forEach(target.add, target)
+        }
+      }
+    }
+
+    fieldGroups.sort((a, b) => a.size - b.size)
+    this.removeDuplicateSetsFromArray(fieldGroups)
+  }
+
+  removeDuplicateSetsFromArray(array) {
+    for(let i = 0; i < array.length; ++i) {
+      for(let j = i+1; j < array.length; ++j) {
+        if([...array[i]].every(a => array[j].has(a))) {
+          array.splice(j, 1)
+          --j
+        }
+      }
+    }
+  }
 
   /**
    * Recursively collects access groups from tree to array without duplications
