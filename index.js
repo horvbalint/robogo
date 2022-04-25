@@ -582,6 +582,7 @@ class Robogo {
 
     return new Promise( (resolve, reject) => {
       sharp(sourcePath)
+        .rotate()
         .resize(size, size, {
           fit: 'inside',
           withoutEnlargement: true, // if the size was already smaller then specified, we do not enlarge it
