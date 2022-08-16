@@ -82,8 +82,18 @@ Robogo is a solid base for you to build upon automated processes. For this you c
 | description    | Can be used to display as a hover tooltip text. e.g.: {type String, description: “Unique identifier of the user”}        |         |
 | minWriteAccess | A positive number. If given, one needs an accesslevel higher or equal to create, update or delete this field             | 0       |
 | minReadAccess  | A positive number. If given, one needs an accesslevel higher or equal to read this field                                 | 0       |
-| marked         | Simply marks this field, that you can interpret later like however you want it                                                 | false   |
 | hidden         | Fields marked as hidden will not be included in the result of the '/fields/:model' route                                 | false   |
+| marked         | Simply marks this field, that you can interpret later like however you want it                                           | false   |
+| props          | Can be anything json serializable that you later want to use for this field                                                | {}      |
+
+You can add some properties to the model/schema itself:
+
+| Field   | Description   | Default |
+|:-|:-:|:-:|
+| name           | The user readable name of the model, e.g.: if you intend to list out the available models                                |         |
+| description    | A description of what the purpose of the model is                                                                        |         |
+| accesslevel    | A positive number. If given, one needs an accesslevel higher or equal to see the model, when queried using **[this route.](#special-routes)**   | 0       |
+| props          | Can be anything json serializable that you later want to use for this model                                                | {}      |
 
 An example schema can look like this:
 
@@ -115,7 +125,12 @@ const UserSchema = new mongoose.Schema({
     name: "List of the users friends",
     hidden: true
   }
-}, { selectPopulatedPaths: false }) // We usually need this if using mongoose-autopopulate otherwise fields will always be present when queried regardless of the projection 
+}, {
+  selectPopulatedPaths: false, // We usually need this if using mongoose-autopopulate otherwise fields will always be present when queried regardless of the projection 
+  name: 'User',
+  description: 'Holds the registered users',
+  accesslevel: 100,
+}) 
 
 UserSchema.plugin(autopopulate) // Not required, but suggested to be used with file handling
 module.exports = mongoose.model('User', UserSchema) // Export the model so that Robogo can import it later
@@ -415,6 +430,26 @@ axios.delete(`/api/filedelete/:id`)
 <br></br>
 <a name="special-routes"></a>
 ### Special routes
+
+####  /model
+> Returns the registered models and their properties from [the schemas section](#schemas).
+* Method: GET
+* Returns: Array\<Object\>
+
+```javascript
+// an example using the axios library
+axios.get('/api/model')
+```
+
+####  /model/:model
+> Returns the properties for the given model registered in [the schemas section](#schemas).
+* Method: GET
+* Returns: Object
+
+```javascript
+// an example using the axios library
+axios.get('/api/model/User')
+```
 
 ####  /schema/:model
 > Returns a tree-like structure of the fields and their properties for the given model. This is great for creating automated interfaces.

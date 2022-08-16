@@ -27,6 +27,7 @@ class Robogo {
   }) {
     this.MongooseConnection     = MongooseConnection
     this.BaseDBString           = String(MongooseConnection.connections[0]._connectionString)
+    this.Models                 = {[this.BaseDBString]: {}}
     this.Schemas                = {[this.BaseDBString]: {}}
     this.PathSchemas            = {}
     this.DecycledSchemas        = {}
@@ -80,6 +81,12 @@ class Robogo {
 
       let model = require(`${this.SchemaDir}/${schemaFile}`)
       let modelName = model.modelName || model.default.modelName
+
+      this.Models[this.BaseDBString][modelName] = {
+        name: model.schema.options.name,
+        accesslevel: model.schema.options.accesslevel || 0,
+        props: model.schema.options.props || {},
+      }
 
       this.Schemas[this.BaseDBString][modelName] = this.GenerateSchema(model)
       this.Middlewares[modelName] = {
@@ -339,6 +346,7 @@ class Robogo {
       description: fieldDescriptor.options.description || null,
       minReadAccess: fieldDescriptor.options.minReadAccess || 0,
       minWriteAccess: fieldDescriptor.options.minWriteAccess || 0,
+      props: fieldDescriptor.options.props || {},
     }
     if(fieldDescriptor.options.marked) field.marked = true
     if(fieldDescriptor.options.hidden) field.hidden = true
@@ -356,6 +364,7 @@ class Robogo {
       field.description = field.description || Emb.options.description || null
       field.minReadAccess = Math.max(field.minReadAccess, (Emb.options.minReadAccess || 0))
       field.minWriteAccess = Math.max(field.minWriteAccess, (Emb.options.minWriteAccess || 0))
+      field.props = field.props || Emb.options.props || {}
 
       if(!Emb.instance) field.subfields = []
       if(Emb.options.marked) field.marked = true
@@ -372,7 +381,7 @@ class Robogo {
       field.subfields = []
     }
     // If a Mixed type is found we try to check if it was intentional or not
-    // if not, then we warn the user about the possible danger
+    // if not, then we warn the user about the possible error
     // TODO: Find a better way to do this
     else if(field.type == 'Mixed') {
       let givenType = field.type
@@ -900,6 +909,28 @@ class Robogo {
     // --------------
 
     // SPECIAL routes
+    Router.get( '/model/:model', (req, res) => {
+      let model = this.Models[this.BaseDBString][req.params.model]
+
+      if(req.checkAccess && model.accesslevel > req.accesslevel)
+        res.status(403).send()
+      else
+        res.send({model: req.params.model, ...model})
+    })
+
+    Router.get( '/model', (req, res) => {
+      let models = []
+
+      for(let modelName in this.Models[this.BaseDBString]) {
+        let model = this.Models[this.BaseDBString][modelName]
+        if(req.checkAccess && model.accesslevel > req.accesslevel) continue
+
+        models.push({model: modelName, ...model})
+      }
+
+      res.send(models)
+    })
+
     Router.get( '/schema/:model', (req, res) => {
       function mainPart(req, res) {
         let schema = this.DecycledSchemas[req.params.model]
