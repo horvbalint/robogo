@@ -26,9 +26,9 @@ class Robogo {
     ShowLogs = true,
   }) {
     this.MongooseConnection     = MongooseConnection
-    this.BaseDBString           = String(MongooseConnection.connections[0]._connectionString)
-    this.Models                 = {[this.BaseDBString]: {}}
-    this.Schemas                = {[this.BaseDBString]: {}}
+    this.DefaultDBString        = String(MongooseConnection.connections[0]._connectionString)
+    this.Models                 = {[this.DefaultDBString]: {}}
+    this.Schemas                = {[this.DefaultDBString]: {}}
     this.PathSchemas            = {}
     this.DecycledSchemas        = {}
     this.RoboFileShema          = []
@@ -76,19 +76,19 @@ class Robogo {
    * Finally it handles the references between the schemas.
    */
   GenerateSchemas() {
-    for( let schemaFile of fs.readdirSync(this.SchemaDir) ) {
-      if( !schemaFile.endsWith('.js') ) continue
+    for(let schemaPath of this._GetFilesRecursievely(this.SchemaDir).flat(Infinity)) {
+      if(!schemaPath.endsWith('.js')) continue
 
-      let model = require(`${this.SchemaDir}/${schemaFile}`)
+      let model = require(schemaPath)
       let modelName = model.modelName || model.default.modelName
 
-      this.Models[this.BaseDBString][modelName] = {
+      this.Models[this.DefaultDBString][modelName] = {
         name: model.schema.options.name,
         accesslevel: model.schema.options.accesslevel || 0,
         props: model.schema.options.props || {},
       }
 
-      this.Schemas[this.BaseDBString][modelName] = this.GenerateSchema(model)
+      this.Schemas[this.DefaultDBString][modelName] = this.GenerateSchema(model)
       this.Middlewares[modelName] = {
         C: { before: () => Promise.resolve(), after: () => Promise.resolve() },
         R: { before: () => Promise.resolve(), after: () => Promise.resolve() },
@@ -103,6 +103,17 @@ class Robogo {
       for(let modelName in this.Schemas[DBString])
         for(let field of this.Schemas[DBString][modelName])
           this.plugInFieldRef(field, modelName)
+  }
+
+  _GetFilesRecursievely(rootPath) {
+    let entries = fs.readdirSync(rootPath, {withFileTypes: true})
+
+    return entries.map( entry => {
+      let entryPath = path.join(rootPath, entry.name)
+      
+      if(entry.isDirectory()) return this._GetFilesRecursievely(entryPath)
+      else return entryPath
+    })
   }
 
   /**
@@ -124,8 +135,8 @@ class Robogo {
    * Theese are the schema types, that can be turned into JSON when needed.
    */
   GenerateDecycledSchemas() {
-    for(let modelName in this.Schemas[this.BaseDBString]) {
-      const DecycledSchema = this.CopySubfields({subfields: this.Schemas[this.BaseDBString][modelName]}) // We copy the top level of fields
+    for(let modelName in this.Schemas[this.DefaultDBString]) {
+      const DecycledSchema = this.CopySubfields({subfields: this.Schemas[this.DefaultDBString][modelName]}) // We copy the top level of fields
       this.DecycledSchemas[modelName] = DecycledSchema.subfields // Theese new fields will be the top level of the decycled schema
 
       for(let field of this.DecycledSchemas[modelName])
@@ -407,11 +418,11 @@ class Robogo {
       let givenRef = field.ref
       let isModel = typeof givenRef == 'function'
 
-      field.DBString = isModel ? givenRef.db._connectionString : this.BaseDBString // we need to know which connection the ref model is from
+      field.DBString = isModel ? givenRef.db._connectionString : this.DefaultDBString // we need to know which connection the ref model is from
       field.ref = isModel ? givenRef.modelName : givenRef
 
       // if the model is from another connection, we generate a schema descriptor for it, so we can later use it as ref
-      if(field.DBString != this.BaseDBString) {
+      if(field.DBString != this.DefaultDBString) {
         if(!this.Schemas[field.DBString]) this.Schemas[field.DBString] = {}
         this.Schemas[field.DBString][field.ref] = this.GenerateSchema(givenRef)
       }
@@ -477,7 +488,7 @@ class Robogo {
    */
   RemoveDeclinedFieldsFromObject(fields, object, accesslevel = 0, authField = 'minReadAccess') {
     if(!object) return
-    if(typeof fields == 'string') fields = this.Schemas[this.BaseDBString][fields] // if model name was given, then we get the models fields
+    if(typeof fields == 'string') fields = this.Schemas[this.DefaultDBString][fields] // if model name was given, then we get the models fields
 
     for(let field of fields) {
       if(field[authField] > accesslevel) delete object[field.key]
@@ -521,7 +532,7 @@ class Robogo {
    */
   GetFields(schema, maxDepth = Infinity, depth = 0) {
     if(typeof schema == 'string')
-      schema = (maxDepth == Infinity ? this.DecycledSchemas : this.Schemas[this.BaseDBString])[schema] // if string was given, we get the schema descriptor
+      schema = (maxDepth == Infinity ? this.DecycledSchemas : this.Schemas[this.DefaultDBString])[schema] // if string was given, we get the schema descriptor
 
     let fields = []
 
@@ -639,7 +650,7 @@ class Robogo {
    */
   CRUDSRoute(req, res, mainPart, responsePart, operation) {
     // if the model is unkown send an error
-    if(!this.Schemas[this.BaseDBString][req.params.model]) {
+    if(!this.Schemas[this.DefaultDBString][req.params.model]) {
       this.Logger.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
       return res.status(500).send('MISSING MODEL')
     }
@@ -910,7 +921,7 @@ class Robogo {
 
     // SPECIAL routes
     Router.get( '/model/:model', (req, res) => {
-      let model = this.Models[this.BaseDBString][req.params.model]
+      let model = this.Models[this.DefaultDBString][req.params.model]
 
       if(req.checkAccess && model.accesslevel > req.accesslevel)
         res.status(403).send()
@@ -921,8 +932,8 @@ class Robogo {
     Router.get( '/model', (req, res) => {
       let models = []
 
-      for(let modelName in this.Models[this.BaseDBString]) {
-        let model = this.Models[this.BaseDBString][modelName]
+      for(let modelName in this.Models[this.DefaultDBString]) {
+        let model = this.Models[this.DefaultDBString][modelName]
         if(req.checkAccess && model.accesslevel > req.accesslevel) continue
 
         models.push({model: modelName, ...model})
