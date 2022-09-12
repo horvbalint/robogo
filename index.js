@@ -26,8 +26,9 @@ class Robogo {
     ShowLogs = true,
   }) {
     this.MongooseConnection     = MongooseConnection
-    this.BaseDBString           = String(MongooseConnection.connections[0]._connectionString)
-    this.Schemas                = {[this.BaseDBString]: {}}
+    this.DefaultDBString        = String(MongooseConnection.connections[0]._connectionString)
+    this.Models                 = {[this.DefaultDBString]: {}}
+    this.Schemas                = {[this.DefaultDBString]: {}}
     this.PathSchemas            = {}
     this.DecycledSchemas        = {}
     this.RoboFileShema          = []
@@ -75,13 +76,19 @@ class Robogo {
    * Finally it handles the references between the schemas.
    */
   GenerateSchemas() {
-    for( let schemaFile of fs.readdirSync(this.SchemaDir) ) {
-      if( !schemaFile.endsWith('.js') ) continue
+    for(let schemaPath of this._GetFilesRecursievely(this.SchemaDir).flat(Infinity)) {
+      if(!schemaPath.endsWith('.js')) continue
 
-      let model = require(`${this.SchemaDir}/${schemaFile}`)
+      let model = require(schemaPath)
       let modelName = model.modelName || model.default.modelName
 
-      this.Schemas[this.BaseDBString][modelName] = this.GenerateSchema(model)
+      this.Models[this.DefaultDBString][modelName] = {
+        name: model.schema.options.name,
+        accesslevel: model.schema.options.accesslevel || 0,
+        props: model.schema.options.props || {},
+      }
+
+      this.Schemas[this.DefaultDBString][modelName] = this.GenerateSchema(model)
       this.Middlewares[modelName] = {
         C: { before: () => Promise.resolve(), after: () => Promise.resolve() },
         R: { before: () => Promise.resolve(), after: () => Promise.resolve() },
@@ -96,6 +103,17 @@ class Robogo {
       for(let modelName in this.Schemas[DBString])
         for(let field of this.Schemas[DBString][modelName])
           this.plugInFieldRef(field, modelName)
+  }
+
+  _GetFilesRecursievely(rootPath) {
+    let entries = fs.readdirSync(rootPath, {withFileTypes: true})
+
+    return entries.map( entry => {
+      let entryPath = path.join(rootPath, entry.name)
+      
+      if(entry.isDirectory()) return this._GetFilesRecursievely(entryPath)
+      else return entryPath
+    })
   }
 
   /**
@@ -117,8 +135,8 @@ class Robogo {
    * Theese are the schema types, that can be turned into JSON when needed.
    */
   GenerateDecycledSchemas() {
-    for(let modelName in this.Schemas[this.BaseDBString]) {
-      const DecycledSchema = this.CopySubfields({subfields: this.Schemas[this.BaseDBString][modelName]}) // We copy the top level of fields
+    for(let modelName in this.Schemas[this.DefaultDBString]) {
+      const DecycledSchema = this.CopySubfields({subfields: this.Schemas[this.DefaultDBString][modelName]}) // We copy the top level of fields
       this.DecycledSchemas[modelName] = DecycledSchema.subfields // Theese new fields will be the top level of the decycled schema
 
       for(let field of this.DecycledSchemas[modelName])
@@ -230,6 +248,54 @@ class Robogo {
       read: fieldReadGroups,
       write: fieldWriteGroups,
     }
+  }
+
+  mergeChildAccessGroups(fieldGroups, resOfSubfields, key) {
+    for(let [index, nodeAccess] of fieldGroups.entries()) { // a node read access-ei
+      for(let child of resOfSubfields) { // childen's results
+        if(child[key].some(g => [...g].every(a => nodeAccess.has(a)))) continue
+        
+        let copysNeeded = child[key].length-1
+        for(let i = 0; i < copysNeeded; ++i) {
+          fieldGroups.splice(index, 0, new Set(nodeAccess))
+        }
+
+        for(let [ind, accessGroup] of child[key].entries()) { // access groups of child
+          let target = fieldGroups[index+ind]
+          accessGroup.forEach(target.add, target)
+        }
+      }
+    }
+
+    fieldGroups.sort((a, b) => a.size - b.size)
+    this.removeDuplicateSetsFromArray(fieldGroups)
+  }
+
+  removeDuplicateSetsFromArray(array) {
+    for(let i = 0; i < array.length; ++i) {
+      for(let j = i+1; j < array.length; ++j) {
+        if([...array[i]].every(a => array[j].has(a))) {
+          array.splice(j, 1)
+          --j
+        }
+      }
+    }
+  }
+
+  /**
+   * Recursively collects access groups from tree to array without duplications
+   * @param {Object} accesTree 
+   * @returns {{read: Array, write: Array}}
+   */
+  createAccessGroupFromTree(accessTree, accessArray = new Set()) {
+    if(!Object.keys(accessTree).length) return [...accessArray]
+
+    for(let [node, subTree] of Object.entries(accessTree)) {
+      accessArray.add(node)
+      this.createAccessGroupFromTree(subTree, accessArray)
+    }
+
+    return [...accessArray]
   }
 
   mergeChildAccessGroups(fieldGroups, resOfSubfields, key) {
@@ -392,6 +458,7 @@ class Robogo {
       description: fieldDescriptor.options.description || null,
       readGroups: fieldDescriptor.options.readGroups || [],
       writeGroups: fieldDescriptor.options.writeGroups || [],
+      props: fieldDescriptor.options.props || {},
     }
     if(fieldDescriptor.options.marked) field.marked = true
     if(fieldDescriptor.options.hidden) field.hidden = true
@@ -409,6 +476,7 @@ class Robogo {
       field.description = field.description || Emb.options.description || null
       field.readGroups = [...new Set([...field.readGroups, ...(Emb.options.readGroups || [])])] // collecting all access groups without duplication
       field.writeGroups = [...new Set([...field.writeGroups, ...(Emb.options.writeGroups || [])])] // collecting all access groups without duplication
+      field.props = field.props || Emb.options.props || {}
 
       if(!Emb.instance) field.subfields = []
       if(Emb.options.marked) field.marked = true
@@ -425,7 +493,7 @@ class Robogo {
       field.subfields = []
     }
     // If a Mixed type is found we try to check if it was intentional or not
-    // if not, then we warn the user about the possible danger
+    // if not, then we warn the user about the possible error
     // TODO: Find a better way to do this
     else if(field.type == 'Mixed') {
       let givenType = field.type
@@ -451,11 +519,11 @@ class Robogo {
       let givenRef = field.ref
       let isModel = typeof givenRef == 'function'
 
-      field.DBString = isModel ? givenRef.db._connectionString : this.BaseDBString // we need to know which connection the ref model is from
+      field.DBString = isModel ? givenRef.db._connectionString : this.DefaultDBString // we need to know which connection the ref model is from
       field.ref = isModel ? givenRef.modelName : givenRef
 
       // if the model is from another connection, we generate a schema descriptor for it, so we can later use it as ref
-      if(field.DBString != this.BaseDBString) {
+      if(field.DBString != this.DefaultDBString) {
         if(!this.Schemas[field.DBString]) this.Schemas[field.DBString] = {}
         this.Schemas[field.DBString][field.ref] = this.GenerateSchema(givenRef)
       }
@@ -531,7 +599,7 @@ class Robogo {
    */
   RemoveDeclinedFieldsFromObject(fields, object, accessGroups = [], authField = 'readGroups') {
     if(!object) return
-    if(typeof fields == 'string') fields = this.Schemas[this.BaseDBString][fields] // if model name was given, then we get the models fields
+    if(typeof fields == 'string') fields = this.Schemas[this.DefaultDBString][fields] // if model name was given, then we get the models fields
 
     for(let field of fields) {
       if(!this.HasAccess(field[authField], accessGroups)) delete object[field.key]
@@ -575,7 +643,7 @@ class Robogo {
    */
   GetFields(schema, maxDepth = Infinity, depth = 0) {
     if(typeof schema == 'string')
-      schema = (maxDepth == Infinity ? this.DecycledSchemas : this.Schemas[this.BaseDBString])[schema] // if string was given, we get the schema descriptor
+      schema = (maxDepth == Infinity ? this.DecycledSchemas : this.Schemas[this.DefaultDBString])[schema] // if string was given, we get the schema descriptor
 
     let fields = []
 
@@ -645,6 +713,7 @@ class Robogo {
 
     return new Promise( (resolve, reject) => {
       sharp(sourcePath)
+        .rotate()
         .resize(size, size, {
           fit: 'inside',
           withoutEnlargement: true, // if the size was already smaller then specified, we do not enlarge it
@@ -692,7 +761,7 @@ class Robogo {
    */
   CRUDSRoute(req, res, mainPart, responsePart, operation) {
     // if the model is unkown send an error
-    if(!this.Schemas[this.BaseDBString][req.params.model]) {
+    if(!this.Schemas[this.DefaultDBString][req.params.model]) {
       this.Logger.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
       return res.status(500).send('MISSING MODEL')
     }
@@ -972,6 +1041,28 @@ class Robogo {
     // --------------
 
     // SPECIAL routes
+    Router.get( '/model/:model', (req, res) => {
+      let model = this.Models[this.DefaultDBString][req.params.model]
+
+      if(req.checkAccess && model.accesslevel > req.accesslevel)
+        res.status(403).send()
+      else
+        res.send({model: req.params.model, ...model})
+    })
+
+    Router.get( '/model', (req, res) => {
+      let models = []
+
+      for(let modelName in this.Models[this.DefaultDBString]) {
+        let model = this.Models[this.DefaultDBString][modelName]
+        if(req.checkAccess && model.accesslevel > req.accesslevel) continue
+
+        models.push({model: modelName, ...model})
+      }
+
+      res.send(models)
+    })
+
     Router.get( '/schema/:model', (req, res) => {
       function mainPart(req, res) {
         let schema = this.DecycledSchemas[req.params.model]
