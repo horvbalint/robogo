@@ -201,16 +201,22 @@ class Robogo {
         this.GeneratePathSchema(f, acc, `${prefix}${field.key}.`)
   }
 
+
   /**
    * Calculates the highest read and write accesses for every model and saves it to this.ModelsHighestAccesses[modelName].
    */
   CollectHighestAccessesOfModels() {
     for(let modelName in this.DecycledSchemas) {
-      this.ModelsHighestAccesses[modelName] = this.CollectHighestAccessesOfModel(modelName, {
+      let accessesOfModel = this.CollectHighestAccessesOfModel(modelName, {
         subfields: this.DecycledSchemas[modelName],
-        minReadAccess: 0,
-        minWriteAccess: 0,
-      })
+        readGroups: [null], // null is needed on model level, without it, the result would be an empty array (bc of the for loop)
+        writeGroups: [null],
+      }) 
+
+      this.ModelsHighestAccesses[modelName] = {
+        read: accessesOfModel.read.map(ag => {ag.delete(null); return [...ag]}),
+        write: accessesOfModel.write.map(ag => {ag.delete(null); return [...ag]})
+      }
     }
   }
 
@@ -219,30 +225,125 @@ class Robogo {
    * @param {String} modelName - Name of the model
    * @param {Object} field - A robogo field descriptor
    */
-  CollectHighestAccessesOfModel(modelName, field) {
+  CollectHighestAccessesOfModel(modelName, field, occurrences = new Set()) {
     if(this.ModelsHighestAccesses[modelName]) // If this model was already calculated
       return this.ModelsHighestAccesses[modelName] // then we return that result
 
     if(!field.subfields || (field.ref && !field.autopopulate)) return { // if the field is a 'leaf' or it has subfields but it wont be populated, so we dont see those values, then we return our accesses
-      read: field.minReadAccess,
-      write: field.minWriteAccess,
+      read: field.readGroups.map(a => new Set([a])),
+      write: field.writeGroups.map(a => new Set([a])),
     }
-
-    let maxReadAccess = field.minReadAccess
-    let maxWriteAccess = field.minWriteAccess
+    
     let subModelName = field.ref || modelName
-    let resOfSubfields = field.subfields.map( f => this.CollectHighestAccessesOfModel(subModelName, f) ) // we calculate the results of our subfields
-
-    // we take the maximum of our accesses and the ones in our subfields
-    for(let res of resOfSubfields) {
-      if(res.read > maxReadAccess) maxReadAccess = res.read
-      if(res.write > maxWriteAccess) maxWriteAccess = res.write
-    }
-
+    let resOfSubfields = field.subfields.map( f => this.CollectHighestAccessesOfModel(subModelName, f, occurrences) ) // we calculate the results of our subfields
+    
+    // we collect all the combinations of the needed access groups into an object
+    let fieldReadGroups = field.readGroups.map(a => new Set([a]))
+    this.mergeChildAccessGroups(fieldReadGroups, resOfSubfields, 'read')
+    
+    let fieldWriteGroups = field.writeGroups.map(a => new Set([a]))
+    this.mergeChildAccessGroups(fieldWriteGroups, resOfSubfields, 'write')
+ 
     return {
-      read: maxReadAccess,
-      write: maxWriteAccess,
+      read: fieldReadGroups,
+      write: fieldWriteGroups,
     }
+  }
+
+  mergeChildAccessGroups(fieldGroups, resOfSubfields, key) {
+    for(let [index, nodeAccess] of fieldGroups.entries()) { // a node read access-ei
+      for(let child of resOfSubfields) { // childen's results
+        if(child[key].some(g => [...g].every(a => nodeAccess.has(a)))) continue
+        
+        let copysNeeded = child[key].length-1
+        for(let i = 0; i < copysNeeded; ++i) {
+          fieldGroups.splice(index, 0, new Set(nodeAccess))
+        }
+
+        for(let [ind, accessGroup] of child[key].entries()) { // access groups of child
+          let target = fieldGroups[index+ind]
+          accessGroup.forEach(target.add, target)
+        }
+      }
+    }
+
+    fieldGroups.sort((a, b) => a.size - b.size)
+    this.removeDuplicateSetsFromArray(fieldGroups)
+  }
+
+  removeDuplicateSetsFromArray(array) {
+    for(let i = 0; i < array.length; ++i) {
+      for(let j = i+1; j < array.length; ++j) {
+        if([...array[i]].every(a => array[j].has(a))) {
+          array.splice(j, 1)
+          --j
+        }
+      }
+    }
+  }
+
+  /**
+   * Recursively collects access groups from tree to array without duplications
+   * @param {Object} accesTree 
+   * @returns {{read: Array, write: Array}}
+   */
+  createAccessGroupFromTree(accessTree, accessArray = new Set()) {
+    if(!Object.keys(accessTree).length) return [...accessArray]
+
+    for(let [node, subTree] of Object.entries(accessTree)) {
+      accessArray.add(node)
+      this.createAccessGroupFromTree(subTree, accessArray)
+    }
+
+    return [...accessArray]
+  }
+
+  mergeChildAccessGroups(fieldGroups, resOfSubfields, key) {
+    for(let [index, nodeAccess] of fieldGroups.entries()) { // a node read access-ei
+      for(let child of resOfSubfields) { // childen's results
+        if(child[key].some(g => [...g].every(a => nodeAccess.has(a)))) continue
+        
+        let copysNeeded = child[key].length-1
+        for(let i = 0; i < copysNeeded; ++i) {
+          fieldGroups.splice(index, 0, new Set(nodeAccess))
+        }
+
+        for(let [ind, accessGroup] of child[key].entries()) { // access groups of child
+          let target = fieldGroups[index+ind]
+          accessGroup.forEach(target.add, target)
+        }
+      }
+    }
+
+    fieldGroups.sort((a, b) => a.size - b.size)
+    this.removeDuplicateSetsFromArray(fieldGroups)
+  }
+
+  removeDuplicateSetsFromArray(array) {
+    for(let i = 0; i < array.length; ++i) {
+      for(let j = i+1; j < array.length; ++j) {
+        if([...array[i]].every(a => array[j].has(a))) {
+          array.splice(j, 1)
+          --j
+        }
+      }
+    }
+  }
+
+  /**
+   * Recursively collects access groups from tree to array without duplications
+   * @param {Object} accesTree 
+   * @returns {{read: Array, write: Array}}
+   */
+  createAccessGroupFromTree(accessTree, accessArray = new Set()) {
+    if(!Object.keys(accessTree).length) return [...accessArray]
+
+    for(let [node, subTree] of Object.entries(accessTree)) {
+      accessArray.add(node)
+      this.createAccessGroupFromTree(subTree, accessArray)
+    }
+
+    return [...accessArray]
   }
 
   /**
@@ -329,8 +430,8 @@ class Robogo {
           required: false,
           name: fieldKey,
           description: null,
-          minReadAccess: 0,
-          minWriteAccess: 0,
+          readGroups: [],
+          writeGroups: [],
           subfields: []
         })
 
@@ -355,8 +456,8 @@ class Robogo {
       required: fieldDescriptor.options.required || false,
       name: fieldDescriptor.options.name || null,
       description: fieldDescriptor.options.description || null,
-      minReadAccess: fieldDescriptor.options.minReadAccess || 0,
-      minWriteAccess: fieldDescriptor.options.minWriteAccess || 0,
+      readGroups: fieldDescriptor.options.readGroups || [],
+      writeGroups: fieldDescriptor.options.writeGroups || [],
       props: fieldDescriptor.options.props || {},
     }
     if(fieldDescriptor.options.marked) field.marked = true
@@ -373,8 +474,8 @@ class Robogo {
       field.type = Emb.instance || 'Object'
       field.name = field.name || Emb.options.name || null
       field.description = field.description || Emb.options.description || null
-      field.minReadAccess = Math.max(field.minReadAccess, (Emb.options.minReadAccess || 0))
-      field.minWriteAccess = Math.max(field.minWriteAccess, (Emb.options.minWriteAccess || 0))
+      field.readGroups = [...new Set([...field.readGroups, ...(Emb.options.readGroups || [])])] // collecting all access groups without duplication
+      field.writeGroups = [...new Set([...field.writeGroups, ...(Emb.options.writeGroups || [])])] // collecting all access groups without duplication
       field.props = field.props || Emb.options.props || {}
 
       if(!Emb.instance) field.subfields = []
@@ -450,17 +551,27 @@ class Robogo {
   }
 
   /**
+   * Checks if the two given arrays have an intersection or not.
+   * @param {Array<String>} field 
+   * @param {Array<String>} accessGroups 
+   * @returns boolean
+   */
+  HasAccess(field, accessGroups) {
+    return field.some(fa => accessGroups.includes(fa))
+  }
+
+  /**
    * Collects the fields of a model, which need a higher accesslevel, then given as parameter.
    * @param {String} modelName
-   * @param {Number} [accesslevel=0]
-   * @param {String} [authField='minReadAccess'] - Either 'minReadAccess' or 'minWriteAccess'
+   * @param {Number} [accessGroups=[]]
+   * @param {String} [authField='readGroups'] - Either 'readGroups' or 'writeGroups'
    * @param {Boolean} [excludeSubKeys=false] - Indicates whether or not only top level fields should be checked
    */
-  GetDeclinedPaths(modelName, accesslevel = 0, authField = 'minReadAccess', excludeSubKeys = false) {
+  GetDeclinedPaths(modelName, accessGroups = [], authField = 'readGroups', excludeSubKeys = false) {
       let fieldEntries = Object.entries(this.PathSchemas[modelName])
 
       if(excludeSubKeys) fieldEntries = fieldEntries.filter( ([key, field]) => !key.includes('.') )
-      fieldEntries = fieldEntries.filter( ([key, field]) => field[authField] > accesslevel )
+      fieldEntries = fieldEntries.filter( ([key, field]) => !this.HasAccess(field[authField], accessGroups))
 
       return fieldEntries.map(entr => entr[0])
   }
@@ -469,12 +580,12 @@ class Robogo {
    * Removes every field from an array of documents, which need a  higher accesslevel, then given as parameter.
    * @param {String} modelName
    * @param {Array} documents
-   * @param {Number} [accesslevel=0]
-   * @param {String} [authField='minReadAccess']
+   * @param {Number} [accessGroups=[]]
+   * @param {String} [authField='readGroups']
    */
-  RemoveDeclinedFields(modelName, documents, accesslevel = 0, authField = 'minReadAccess') {
+  RemoveDeclinedFields(modelName, documents, accessGroups = [], authField = 'readGroups') {
     for(const document of documents)
-      this.RemoveDeclinedFieldsFromObject(modelName, document, accesslevel, authField)
+      this.RemoveDeclinedFieldsFromObject(modelName, document, accessGroups, authField)
 
     return documents
   }
@@ -483,39 +594,39 @@ class Robogo {
    * Removes every field from an object, which need a higher accesslevel, then given as parameter.
    * @param {Array|String} fields - A robogo schema descriptor or a models name
    * @param {Object} object - The object to remove from
-   * @param {Number} [accesslevel=0]
-   * @param {String} [authField='minReadAccess']
+   * @param {Number} [accessGroups=[]]
+   * @param {String} [authField='readGroups']
    */
-  RemoveDeclinedFieldsFromObject(fields, object, accesslevel = 0, authField = 'minReadAccess') {
+  RemoveDeclinedFieldsFromObject(fields, object, accessGroups = [], authField = 'readGroups') {
     if(!object) return
     if(typeof fields == 'string') fields = this.Schemas[this.DefaultDBString][fields] // if model name was given, then we get the models fields
 
     for(let field of fields) {
-      if(field[authField] > accesslevel) delete object[field.key]
+      if(!this.HasAccess(field[authField], accessGroups)) delete object[field.key]
 
       else if(field.subfields && object[field.key]) {
-        if(Array.isArray(object[field.key])) object[field.key].forEach( obj => this.RemoveDeclinedFieldsFromObject(field.subfields, obj, accesslevel, authField) )
-        else this.RemoveDeclinedFieldsFromObject(field.subfields, object[field.key], accesslevel, authField)
+        if(Array.isArray(object[field.key])) object[field.key].forEach( obj => this.RemoveDeclinedFieldsFromObject(field.subfields, obj, accessGroups, authField) )
+        else this.RemoveDeclinedFieldsFromObject(field.subfields, object[field.key], accessGroups, authField)
       }
     }
   }
 
   /**
-   * Removes every field from a schema descriptor, which have a higher minReadAccess then the given accesslevel.
+   * Removes every field from a schema descriptor, which have a higher readGroups then the given accesslevel.
    * @param {Array|String} fields - A robogo schema descriptor or a models name
-   * @param {Number} [accesslevel=0]
+   * @param {Number} [accessGroups=[]]
    */
-  RemoveDeclinedFieldsFromSchema(schema, accesslevel = 0) {
+  RemoveDeclinedFieldsFromSchema(schema, accessGroups = []) {
     if(typeof schema == 'string') schema = this.DecycledSchemas[schema] // if string was given, we get the schema descriptor
 
     let fields = []
 
     for(let field of schema) {
-      if(field.minReadAccess > accesslevel) continue
+      if(!this.HasAccess(field.readGroups, accessGroups)) continue
       let newField = {...field}
 
       if(field.subfields)
-        newField.subfields = this.RemoveDeclinedFieldsFromSchema(field.subfields, accesslevel)
+        newField.subfields = this.RemoveDeclinedFieldsFromSchema(field.subfields, accessGroups)
 
       fields.push(newField)
     }
@@ -696,13 +807,23 @@ class Robogo {
   }
 
   /**
+   * Checks if models highest accesses contains an access group whose all elements are in the users accesses
+   * @param {String} model 
+   * @param {String} key 
+   * @param {Array} accesslevels 
+   */
+  hasTheMinimumAccesses(model, key, accesslevels) {
+    return this.ModelsHighestAccesses[model][key].some(ag => ag.every(a => accesslevels.includes(a)))
+  }
+
+  /**
    * Generates all the routes of robogo and returns the express router.
    */
   GenerateRoutes() {
     // Middleware that adds default values to robogo properties if they were not specified
     Router.use( (req, _, next) => {
-      if(req.accesslevel === undefined)
-        req.accesslevel = 0
+      if(req.accessGroups === undefined)
+        req.accessGroups = []
 
       if(req.checkAccess === undefined)
         req.checkAccess = this.CheckAccess
@@ -712,10 +833,10 @@ class Robogo {
     // CREATE routes
     Router.post( '/create/:model', (req, res) => {
       function mainPart(req, res) {
-        let checkWriteAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].write > req.accesslevel
+        let checkWriteAccess = req.checkAccess && !this.hasTheMinimumAccesses(req.params.model, 'write', req.accesslevel)
 
         if(checkWriteAccess)
-          this.RemoveDeclinedFieldsFromObject(req.params.model, req.body, req.accesslevel, 'minWriteAccess')
+          this.RemoveDeclinedFieldsFromObject(req.params.model, req.body, req.accessGroups, 'writeGroups')
 
         const Model = this.MongooseConnection.model(req.params.model)
         const ModelInstance = new Model(req.body)
@@ -724,10 +845,10 @@ class Robogo {
 
       async function responsePart(req, res, result) {
         result = result.toObject() // this is needed, because mongoose returns an immutable object by default
-        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+        let checkReadAccess = req.checkAccess && !this.hasTheMinimumAccesses(req.params.model, 'read', req.accesslevel)
 
         if(checkReadAccess)
-          this.RemoveDeclinedFieldsFromObject(req.params.model, result, req.accesslevel)
+          this.RemoveDeclinedFieldsFromObject(req.params.model, result, req.accessGroups)
 
         res.send(result)
       }
@@ -749,10 +870,10 @@ class Robogo {
       }
 
       async function responsePart(req, res, results) {
-        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+        let checkReadAccess = req.checkAccess && !this.hasTheMinimumAccesses(req.params.model, 'read', req.accesslevel)
 
         if(checkReadAccess)
-          this.RemoveDeclinedFields(req.params.model, results, req.accesslevel)
+          this.RemoveDeclinedFields(req.params.model, results, req.accessGroups)
 
         res.send(results)
       }
@@ -768,10 +889,10 @@ class Robogo {
       }
 
       async function responsePart(req, res, result) {
-        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+        let checkReadAccess = req.checkAccess && !this.hasTheMinimumAccesses(req.params.model, 'read', req.accesslevel)
 
         if(checkReadAccess)
-          this.RemoveDeclinedFieldsFromObject(req.params.model, result, req.accesslevel)
+          this.RemoveDeclinedFieldsFromObject(req.params.model, result, req.accessGroups)
 
         res.send(result)
       }
@@ -787,10 +908,10 @@ class Robogo {
       }
 
       async function responsePart(req, res, results) {
-        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+        let checkReadAccess = req.checkAccess && !this.hasTheMinimumAccesses(req.params.model, 'read', req.accesslevel)
 
         if(checkReadAccess)
-          this.RemoveDeclinedFields(req.params.model, results, req.accesslevel)
+          this.RemoveDeclinedFields(req.params.model, results, req.accessGroups)
 
         if(!req.query.threshold)
           req.query.threshold = 0.4
@@ -800,7 +921,7 @@ class Robogo {
           let schema = this.DecycledSchemas[req.params.model]
 
           if(checkReadAccess)
-            schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accesslevel)
+            schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accessGroups)
 
           req.query.keys = this.GetSearchKeys(schema, req.query.depth)
         }
@@ -822,10 +943,10 @@ class Robogo {
     // UPDATE routes
     Router.patch( '/update/:model', (req, res) => {
       function mainPart(req, res) {
-        let checkWriteAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].write > req.accesslevel
+        let checkWriteAccess = req.checkAccess && !this.hasTheMinimumAccesses(req.params.model, 'write', req.accesslevel)
 
         if(checkWriteAccess)
-          this.RemoveDeclinedFieldsFromObject(req.params.model, req.body, req.accesslevel, 'minWriteAccess')
+          this.RemoveDeclinedFieldsFromObject(req.params.model, req.body, req.accessGroups, 'writeGroups')
 
         return this.MongooseConnection.model(req.params.model)
           .updateOne({ _id: req.body._id }, req.body)
@@ -842,10 +963,10 @@ class Robogo {
     // DELETE routes
     Router.delete( '/delete/:model/:id', (req, res) => {
       function mainPart(req, res) {
-        let checkWriteAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].write > req.accesslevel
+        let checkWriteAccess = req.checkAccess && !this.hasTheMinimumAccesses(req.params.model, 'write', req.accesslevel)
 
         if(checkWriteAccess) {
-          const declinedPaths = this.GetDeclinedPaths(req.params.model, req.accesslevel, 'minWriteAccess', true)
+          const declinedPaths = this.GetDeclinedPaths(req.params.model, req.accessGroups, 'writeGroups', true)
           if(declinedPaths.length) return Promise.reject('PERMISSION DENIED')
         }
 
@@ -949,10 +1070,10 @@ class Robogo {
       }
 
       async function responsePart(req, res, result) {
-        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+        let checkReadAccess = req.checkAccess && !this.hasTheMinimumAccesses(req.params.model, 'read', req.accesslevel)
 
         if(checkReadAccess)
-          result = this.RemoveDeclinedFieldsFromSchema(result, req.accesslevel)
+          result = this.RemoveDeclinedFieldsFromSchema(result, req.accessGroups)
 
         res.send(result)
       }
@@ -962,11 +1083,11 @@ class Robogo {
 
     Router.get( '/fields/:model', (req, res) => {
       function mainPart(req, res) {
-        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+        let checkReadAccess = req.checkAccess && !this.hasTheMinimumAccesses(req.params.model, 'read', req.accesslevel)
         let schema = this.DecycledSchemas[req.params.model]
 
         if(checkReadAccess)
-          schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accesslevel)
+          schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accessGroups)
 
         let fields = this.GetFields(schema, req.query.depth)
         return Promise.resolve(fields)
@@ -996,11 +1117,11 @@ class Robogo {
 
     Router.get( '/searchkeys/:model', (req, res) => {
       function mainPart(req, res) {
-        let checkReadAccess = req.checkAccess && this.ModelsHighestAccesses[req.params.model].read > req.accesslevel
+        let checkReadAccess = req.checkAccess && !this.hasTheMinimumAccesses(req.params.model, 'read', req.accesslevel)
         let schema = this.DecycledSchemas[req.params.model]
 
         if(checkReadAccess)
-          schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accesslevel)
+          schema = this.RemoveDeclinedFieldsFromSchema(schema, req.accessGroups)
 
         let keys = this.GetSearchKeys(schema, req.query.depth)
         return Promise.resolve(keys)
