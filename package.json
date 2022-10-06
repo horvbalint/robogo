@@ -29,8 +29,8 @@
   "author": "horvbalint",
   "license": "Apache-2.0",
   "dependencies": {
+    "fuse.js": "^6.4.2",
     "multer": "^1.4.2",
-    "sharp": "^0.27.1",
-    "fuse.js": "^6.4.2"
+    "sharp": "^0.27.1"
   }
 }
