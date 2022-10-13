@@ -22,6 +22,7 @@ class Robogo {
     MaxThumbnailSize = 200,
     CheckAccess = true,
     AccessGroups = [],
+    AdminGroup = null,
     ShowErrors = true,
     ShowWarnings = true,
     ShowLogs = true,
@@ -51,6 +52,7 @@ class Robogo {
     this.GroupTypes             = {read: 'readGroups', write: 'writeGroups'}
     this.GuardTypes             = {read: 'readGuards', write: 'writeGuards'}
     this.AccessGroups           = AccessGroups
+    this.AdminGroup             = AdminGroup
 
     if(FileDir)
       this.Upload = multer({dest: FileDir}) // multer will handle the saving of files, when one is uploaded
@@ -87,10 +89,25 @@ class Robogo {
 
       this.Models[this.BaseDBString][modelName] = {
         name: model.schema.options.name,
-        readGroups: model.schema.options.readGroups || [],
-        writeGroups: model.schema.options.writeGroups || [],
         props: model.schema.options.props || {},
         highestAccesses: null,
+      }
+
+      for(let groupType of Object.values(this.GroupTypes)) {
+        if(!model.schema.options[groupType]) continue
+
+        this.Models[this.BaseDBString][modelName][groupType] = model.schema.options[groupType]
+
+        // we add the 'AdminGroup' to the accessGroups if it was not empty
+        if(this.AdminGroup) this.Models[this.BaseDBString][modelName][groupType].unshift(this.AdminGroup)
+
+        // We check if an access group is used, that was not provided in the constructor,
+        // if so we warn the developer, because it might be a typo.
+        for(let group of this.Models[this.BaseDBString][modelName][groupType]) {
+          if(!this.AccessGroups.includes(group)) {
+            this.Logger.LogUnknownAccessGroupInModel(modelName, group, `processing the model '${modelName}'`)
+          }
+        }
       }
 
       this.Schemas[this.BaseDBString][modelName] = this.GenerateSchema(model)
@@ -234,19 +251,19 @@ class Robogo {
     if(this.Models[this.BaseDBString][modelName].highestAccesses) // If this model was already calculated
       return this.Models[this.BaseDBString][modelName].highestAccesses // then we return that result
 
-    if(!field.subfields || (field.ref && !field.autopopulate)) return { // if the field is a 'leaf' or it has subfields but it wont be populated, so we dont see those values, then we return our accesses
-      read: field.readGroups.map(a => new Set([a])),
-      write: field.writeGroups.map(a => new Set([a])),
+    if(!field.subfields || field.ref == 'RoboFile') return { // if the field is a 'leaf' or it has subfields but it wont be populated, so we dont see those values, then we return our accesses
+      read: field.readGroups ? field.readGroups.map(a => new Set([a])) : [],
+      write: field.writeGroups ? field.writeGroups.map(a => new Set([a])) : [],
     }
 
     let subModelName = field.ref || modelName
     let resOfSubfields = field.subfields.map( f => this.CollectHighestAccessesOfModel(subModelName, f, occurrences) ) // we calculate the results of our subfields
 
     // we collect all the combinations of the needed access groups into an object
-    let fieldReadGroups = field.readGroups.map(a => new Set([a]))
+    let fieldReadGroups = field.readGroups ? field.readGroups.map(a => new Set([a])) : []
     this.mergeChildAccessGroups(fieldReadGroups, resOfSubfields, 'read')
 
-    let fieldWriteGroups = field.writeGroups.map(a => new Set([a]))
+    let fieldWriteGroups = field.writeGroups ? field.writeGroups.map(a => new Set([a])) : []
     this.mergeChildAccessGroups(fieldWriteGroups, resOfSubfields, 'write')
 
     return {
@@ -301,38 +318,6 @@ class Robogo {
     }
 
     return [...accessArray]
-  }
-
-  mergeChildAccessGroups(fieldGroups, resOfSubfields, key) {
-    for(let [index, nodeAccess] of fieldGroups.entries()) { // a node read access-ei
-      for(let child of resOfSubfields) { // childen's results
-        if(child[key].some(g => [...g].every(a => nodeAccess.has(a)))) continue
-
-        let copysNeeded = child[key].length-1
-        for(let i = 0; i < copysNeeded; ++i) {
-          fieldGroups.splice(index, 0, new Set(nodeAccess))
-        }
-
-        for(let [ind, accessGroup] of child[key].entries()) { // access groups of child
-          let target = fieldGroups[index+ind]
-          accessGroup.forEach(target.add, target)
-        }
-      }
-    }
-
-    fieldGroups.sort((a, b) => a.size - b.size)
-    this.removeDuplicateSetsFromArray(fieldGroups)
-  }
-
-  removeDuplicateSetsFromArray(array) {
-    for(let i = 0; i < array.length; ++i) {
-      for(let j = i+1; j < array.length; ++j) {
-        if([...array[i]].every(a => array[j].has(a))) {
-          array.splice(j, 1)
-          --j
-        }
-      }
-    }
   }
 
   /**
@@ -435,8 +420,6 @@ class Robogo {
           required: false,
           name: fieldKey,
           description: null,
-          readGroups: [],
-          writeGroups: [],
           subfields: []
         })
 
@@ -461,10 +444,6 @@ class Robogo {
       required: fieldDescriptor.options.required || false,
       name: fieldDescriptor.options.name || null,
       description: fieldDescriptor.options.description || null,
-      readGroups: fieldDescriptor.options.readGroups || [],
-      writeGroups: fieldDescriptor.options.writeGroups || [],
-      readGuards: fieldDescriptor.options.readGuards || [],
-      writeGuards: fieldDescriptor.options.writeGuards || [],
       props: fieldDescriptor.options.props || {},
     }
     if(fieldDescriptor.options.marked) field.marked = true
@@ -473,6 +452,10 @@ class Robogo {
     if(fieldDescriptor.options.enum) field.enum = fieldDescriptor.options.enum
     if(fieldDescriptor.options.autopopulate) field.autopopulate = fieldDescriptor.options.autopopulate
     if(fieldDescriptor.options.hasOwnProperty('default')) field.default = fieldDescriptor.options.default
+    if(fieldDescriptor.options.readGroups) field.readGroups = fieldDescriptor.options.readGroups
+    if(fieldDescriptor.options.writeGroups) field.writeGroups = fieldDescriptor.options.writeGroups
+    if(fieldDescriptor.options.readGuards) field.readGuards = fieldDescriptor.options.readGuards
+    if(fieldDescriptor.options.writeGuards) field.writeGuards = fieldDescriptor.options.writeGuards
 
     // if the field is an array we extract the informations of the type it holds
     if(field.isArray) {
@@ -481,10 +464,6 @@ class Robogo {
       field.type = Emb.instance || 'Object'
       field.name = field.name || Emb.options.name || null
       field.description = field.description || Emb.options.description || null
-      field.readGroups = [...new Set([...field.readGroups, ...(Emb.options.readGroups || [])])] // collecting all access groups without duplication
-      field.writeGroups = [...new Set([...field.writeGroups, ...(Emb.options.writeGroups || [])])] // collecting all access groups without duplication
-      field.readGuards = [...field.readGuards, ...(Emb.options.readGuards || [])] // collecting all access groups without duplication
-      field.writeGuards = [...field.writeGuards, ...(Emb.options.writeGuards || [])] // collecting all access groups without duplication
       field.props = field.props || Emb.options.props || {}
 
       if(!Emb.instance) field.subfields = []
@@ -494,21 +473,27 @@ class Robogo {
       if(Emb.options.enum) field.enum = Emb.options.enum
       if(Emb.options.hasOwnProperty('default') && !field.default) field.default = Emb.options.default
       if(Emb.options.autopopulate) field.autopopulate = Emb.options.autopopulate
+      if(Emb.options.readGroups) field.readGroups = [...new Set([...field.readGroups, ...(Emb.options.readGroups || [])])] // collecting all access groups without duplication
+      if(Emb.options.writeGroups) field.writeGroups = [...new Set([...field.writeGroups, ...(Emb.options.writeGroups || [])])] // collecting all access groups without duplication
+      if(Emb.options.readGuards) field.readGuards = [...field.readGuards, ...(Emb.options.readGuards || [])] // collecting all access groups without duplication
+      if(Emb.options.writeGuards) field.writeGuards = [...field.writeGuards, ...(Emb.options.writeGuards || [])] // collecting all access groups without duplication
     }
 
-    // We check if an access group is used, that was not provided in the constructor,
-    // if so we warn the developer, because it might be a typo.
-    for(let group of field.readGuards) {
-      if(!this.AccessGroups.includes(group))
-        this.Logger.LogUnknownAccessGroup(modelName, field.key, group, `processing the field '${modelName} -> ${field.key}'`)
+    for(let groupType of Object.values(this.GroupTypes)) {
+      if(!field[groupType]) continue
+
+      // we add the 'AdminGroup' to the accessGroups if it was not empty
+      if(this.AdminGroup) field[groupType].unshift(this.AdminGroup)
+
+      // We check if an access group is used, that was not provided in the constructor,
+      // if so we warn the developer, because it might be a typo.
+      for(let group of field[groupType]) {
+        if(!this.AccessGroups.includes(group)) {
+          this.Logger.LogUnknownAccessGroupInField(modelName, field.key, group, `processing the field '${modelName} -> ${field.key}'`)
+        }
+      }
     }
 
-    for(let group of field.writeGroups) {
-      if(!this.AccessGroups.includes(group))
-        this.Logger.LogUnknownAccessGroup(modelName, field.key, group, `processing the field '${modelName} -> ${field.key}'`)
-    }
-
-    //
     if(field.type == 'ObjectID') field.type = 'Object'
     else if(field.type == 'Embedded') {
       field.type = 'Object'
@@ -743,7 +728,7 @@ class Robogo {
   HasModelAccess(model, groupType, req) {
     let roboModel = this.Models[this.BaseDBString][model]
 
-    if(roboModel[groupType].some(g => !req.accessGroups.includes(g)))
+    if(!this.HasAccess(roboModel[groupType], req.accessGroups))
       return Promise.reject()
 
     if(roboModel.accessGuards) {
@@ -760,24 +745,24 @@ class Robogo {
 
   /**
    * Checks if the two given arrays have an intersection or not.
-   * @param {Array<String>} field
+   * @param {Array<String>} goodGroups
    * @param {Array<String>} accessGroups
    * @returns boolean
    */
-   HasAccess(field, accessGroups) {
-    return !field.length || field.some(fa => accessGroups.includes(fa))
+  HasAccess(goodGroups, accessGroups) {
+    return !goodGroups || goodGroups.some(fa => accessGroups.includes(fa))
   }
 
   /**
    * Removes every field from an array of documents, which need an access group not included in then given parameter.
    * @param {String} modelName
    * @param {Array} documents
-   * @param {Number} [accessGroups=[]]
+   * @param {Number} [accessGroups]
    * @param {String} [authField='readGroups']
    */
   RemoveDeclinedFields(modelName, documents, mode, accessGroups, req) {
     let promises = documents.map(doc => this.RemoveDeclinedFieldsFromObject(modelName, doc, mode, accessGroups, req))
-    
+
     return Promise.all(promises)
   }
 
@@ -836,7 +821,7 @@ class Robogo {
     let guardType = this.GuardTypes[mode]
     if(field[guardType].length) {
       console.log('GUARD CHECK')
-      let promises = field[guardType].map(guard => this.Promisify(guard(req))) // TODO: no req
+      let promises = field[guardType].map(guard => this.Promisify(guard(req)))
 
       return Promise.all(promises)
         .then( res => {
@@ -877,8 +862,8 @@ class Robogo {
    * @param {String} key
    * @param {Array} accessGroups
    */
-  hasEveryNeededAccessGroup(model, key, accessGroups) {
-    return this.Models[this.BaseDBString][modelName].highesetAccesses[key].some(ag => ag.every(a => accessGroups.includes(a)))
+  hasEveryNeededAccessGroup(modelName, key, accessGroups) {
+    return this.Models[this.BaseDBString][modelName].highestAccesses[key].some(ag => ag.every(a => accessGroups.includes(a)))
   }
 
   /**
@@ -1111,7 +1096,7 @@ class Robogo {
     Router.get( '/model/:model', (req, res) => {
       let model = this.Models[this.BaseDBString][req.params.model]
 
-      if(req.checkAccess && model.readGroups.some(ag => !req.accessGroups.includes(ag)))
+      if(req.checkAccess && !this.HasAccess(model.readGroups, req.accessGroups))
         res.status(403).send()
       else
         res.send({model: req.params.model, ...model})
@@ -1122,7 +1107,7 @@ class Robogo {
 
       for(let modelName in this.Models[this.BaseDBString]) {
         let model = this.Models[this.BaseDBString][modelName]
-        if(req.checkAccess && model.readGroups.some(ag => !req.accessGroups.includes(ag)))
+        if(req.checkAccess && !this.HasAccess(model.readGroups, req.accessGroups))
           continue
 
         models.push({model: modelName, ...model})

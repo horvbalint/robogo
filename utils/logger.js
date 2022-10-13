@@ -151,10 +151,19 @@ Given reason: '${message}'`
     this.LogMessage('log', occurrence, title, description)
   }
 
-  LogUnknownAccessGroup(modelName, fieldKey, accessGroup, occurrence) {
+  LogUnknownAccessGroupInField(modelName, fieldKey, accessGroup, occurrence) {
     let title = `UNKNOWN ACCESS GROUP: '${accessGroup}'`
     let description = `
 There is an unknown access group '${accessGroup}' used in the field '${fieldKey}' of the model '${modelName}'.
+This is most likely just a typo, if not, please add the group to the array of declared access groups in the constructor of robogo.`
+
+    this.LogMessage('warning', occurrence, title, description)
+  }
+
+  LogUnknownAccessGroupInModel(modelName, accessGroup, occurrence) {
+    let title = `UNKNOWN ACCESS GROUP: '${accessGroup}'`
+    let description = `
+There is an unknown access group '${accessGroup}' used in the model '${modelName}'.
 This is most likely just a typo, if not, please add the group to the array of declared access groups in the constructor of robogo.`
 
     this.LogMessage('warning', occurrence, title, description)
