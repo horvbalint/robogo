@@ -233,8 +233,9 @@ class Robogo {
     for(let modelName in this.DecycledSchemas) {
       let accessesOfModel = this.CollectHighestAccessesOfModel(modelName, {
         subfields: this.DecycledSchemas[modelName],
-        readGroups: [null], // null is needed on model level, without it, the result would be an empty array (bc of the for loop)
-        writeGroups: [null],
+        readGroups: [],
+        writeGroups: [],
+        ref: modelName,
       })
 
       this.Models[this.BaseDBString][modelName].highestAccesses = {
@@ -249,17 +250,16 @@ class Robogo {
    * @param {String} modelName - Name of the model
    * @param {Object} field - A robogo field descriptor
    */
-  CollectHighestAccessesOfModel(modelName, field, occurrences = new Set()) {
-    if(this.Models[this.BaseDBString][modelName].highestAccesses) // If this model was already calculated
+  CollectHighestAccessesOfModel(modelName, field) {
+    if(modelName && this.Models[this.BaseDBString][modelName].highestAccesses) // If this model was already calculated
       return this.Models[this.BaseDBString][modelName].highestAccesses // then we return that result
 
-    if(!field.subfields || field.ref == 'RoboFile') return { // if the field is a 'leaf' or it has subfields but it wont be populated, so we dont see those values, then we return our accesses
+    if(!field.subfields || field.ref == 'RoboFile') return { // if the field is a 'leaf' then we return our accesses
       read: field.readGroups ? field.readGroups.map(a => new Set([a])) : [],
       write: field.writeGroups ? field.writeGroups.map(a => new Set([a])) : [],
     }
 
-    let subModelName = field.ref || modelName
-    let resOfSubfields = field.subfields.map( f => this.CollectHighestAccessesOfModel(subModelName, f, occurrences) ) // we calculate the results of our subfields
+    let resOfSubfields = field.subfields.map( f => this.CollectHighestAccessesOfModel(field.ref, f) ) // we calculate the results of our subfields
 
     // we collect all the combinations of the needed access groups into an object
     let fieldReadGroups = field.readGroups ? field.readGroups.map(a => new Set([a])) : []
@@ -274,17 +274,20 @@ class Robogo {
     }
   }
 
-  mergeChildAccessGroups(fieldGroups, resOfSubfields, key) {
+  mergeChildAccessGroups(fieldGroups, resOfSubfields, mode) {
+    if(!fieldGroups.length)
+      fieldGroups.push(new Set([null]))
+
     for(let [index, nodeAccess] of fieldGroups.entries()) { // a node read access-ei
       for(let child of resOfSubfields) { // childen's results
-        if(child[key].some(g => [...g].every(a => nodeAccess.has(a)))) continue
+        if(child[mode].some(g => [...g].every(a => nodeAccess.has(a)))) continue
 
-        let copysNeeded = child[key].length-1
+        let copysNeeded = child[mode].length-1
         for(let i = 0; i < copysNeeded; ++i) {
           fieldGroups.splice(index, 0, new Set(nodeAccess))
         }
 
-        for(let [ind, accessGroup] of child[key].entries()) { // access groups of child
+        for(let [ind, accessGroup] of child[mode].entries()) { // access groups of child
           let target = fieldGroups[index+ind]
           accessGroup.forEach(target.add, target)
         }
@@ -693,19 +696,21 @@ class Robogo {
       return res.status(500).send('MISSING MODEL')
     }
 
-    let groupType = 'readGroups'
+    let mode = 'read'
     switch(operation) {
-      case 'C': groupType = 'writeGroups'; break;
-      case 'U': groupType = 'writeGroups'; break;
-      case 'D': groupType = 'writeGroups'; break;
+      case 'C': mode = 'write'; break;
+      case 'U': mode = 'write'; break;
+      case 'D': mode = 'write'; break;
     }
 
     // the code below calls the middleware and normal parts of the route and handles their errors correspondingly
     const MiddlewareFunctions = this.Middlewares[req.params.model][operation]
     MiddlewareFunctions.before.call(this, req, res)
       .then( () => {
-        this.HasModelAccess(req.params.model, groupType, req)
-          .then( () => {
+        this.HasModelAccess(req.params.model, mode, req)
+          .then( hasAccess => {
+            if(!hasAccess) return res.status(403).send()
+
             mainPart.call(this, req, res)
               .then( result => {
                 MiddlewareFunctions.after.call(this, req, res, result)
@@ -717,26 +722,27 @@ class Robogo {
               })
               .catch( err => {res.status(500).send(err); console.error(err)} )
           })
-          .catch( err => {res.status(403).send(err); console.error(err)} )
       })
       .catch( message => this.Logger.LogMiddlewareMessage(req.params.model, operation, 'before', message) )
   }
 
-  HasModelAccess(model, groupType, req) {
+  HasModelAccess(model, mode, req) {
+    let groupType = this.GroupTypes[mode]
     let roboModel = this.Models[this.BaseDBString][model]
 
-    if(!this.HasGroupAccess(roboModel[groupType], req.accessGroups))
-      return Promise.reject()
+    if(!this.HasGroupAccess(roboModel[groupType], req.accessGroups)) {
+      return Promise.resolve(false)
+    }
 
     if(roboModel.accessGuards) {
       let promises = roboModel.accessGuards.map(guard => Promisify(guard(req)))
       return Promise.all(promises)
         .then( res => {
-          if(res.some(r => !r)) return Promise.reject()
+          if(res.some(r => !r)) return Promise.resolve(false)
         })
     }
 
-    return Promise.resolve()
+    return Promise.resolve(true)
   }
 
 
@@ -861,8 +867,91 @@ class Robogo {
 
       fieldPromises.push(promise)
     }
+
     return Promise.allSettled(fieldPromises)
       .then( res => res.filter(r => r.status == 'fulfilled').map(r => r.value) )
+  }
+
+  getAccesses(model, req) {
+    let accesses = {}
+    let schema = this.Schemas[this.BaseDBString][model]
+
+    // first we check for read and write accesses on the model itself
+    return Promise.all([
+      this.HasModelAccess(model, 'read', req),
+      this.HasModelAccess(model, 'write', req),
+    ])
+      .then(([canReadModel, canWriteModel]) => {
+        accesses.model = {
+          read: canReadModel,
+          write: canWriteModel
+        }
+
+        // then we go and check each field
+        let fieldPromises = []
+        for(let mode of ['read', 'write']) {
+          let promise = Promise.resolve([])
+
+          let checkGroupAccess = !this.hasEveryNeededAccessGroup(model, mode, req.accessGroups)
+
+          if(accesses.model[mode])
+            promise = this.getFieldAccesses(schema, mode, req, checkGroupAccess)
+
+          fieldPromises.push(promise)
+        }
+
+        return Promise.all(fieldPromises)
+      })
+      .then( ([[canReadAllRequired, read], [canWritAllRequired, write]]) => {
+        accesses.fields = {}
+
+        // we merge the read and write accesses into one object
+        let fieldAccesses = {read, write}
+        for(let mode of ['read', 'write']) {
+          for(let field in fieldAccesses[mode]) {
+            if(!accesses.fields[field])
+              accesses.fields[field] = {}
+
+            accesses.fields[field][mode] = fieldAccesses[mode][field]
+          }
+        }
+
+        // once field access are collected, we remove those entries where there is neither read nor write access
+        for(let path in accesses.fields) {
+          let field = accesses.fields[path]
+          if(!field.write && !field.read)
+          delete accesses.fields[path]
+        }
+
+        accesses.model.writeAllRequired = accesses.model.write && canWritAllRequired
+
+        return accesses
+      })
+  }
+
+  async getFieldAccesses(schema, mode, req, checkGroupAccess, accesses = {}, prefix = '') {
+    let promises = schema.map(field => this.IsFieldDeclined(field, mode, req.accessGroups, req, checkGroupAccess))
+    let results = await Promise.all(promises)
+
+    let subPromises = []
+    let trueForAllRequired = true
+    for(let field of schema) {
+      let absolutePath = prefix + field.key
+      accesses[absolutePath] = !results.shift()
+
+      if(field.required && !accesses[absolutePath])
+        trueForAllRequired = false
+
+      if(field.subfields && !field.ref && accesses[absolutePath]) {
+        let promise = this.getFieldAccesses(field.subfields, mode, req, checkGroupAccess, accesses, `${absolutePath}.`)
+        subPromises.push(promise)
+      }
+    }
+
+    let res = await Promise.all(subPromises)
+    let trueForAllSubRequired = !res.some(([forAll]) => !forAll)
+
+    return [trueForAllRequired && trueForAllSubRequired, accesses]
   }
 
   /**
@@ -1118,8 +1207,12 @@ class Robogo {
       let model = this.Models[this.BaseDBString][req.params.model]
 
       this.HasModelAccess(req.params.model, 'read', req)
-        .then( () => res.send({model: req.params.model, ...model}) )
-        .catch( () => res.status(403).send() )
+        .then( hasAccess => {
+          if(hasAccess)
+            res.send({model: req.params.model, ...model})
+          else
+            res.status(403).send()
+        })
     })
 
     Router.get( '/model', (req, res) => {
@@ -1129,9 +1222,16 @@ class Robogo {
         promises.push(promise)
       }
 
-      Promise.allSettled(promises)
+      Promise.all(promises)
         .then( results => {
-          let models = results.filter(r => r.status == 'fulfilled').map(r => r.value)
+          let models = []
+
+          for(let modelName in this.Models[this.BaseDBString]) {
+            if(!results.shift()) continue
+
+            let model = this.Models[this.BaseDBString][modelName]
+            models.push({model: modelName, ...model})
+          }
 
           res.send(models)
         })
@@ -1201,7 +1301,11 @@ class Robogo {
 
       this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
     })
-    // ------------
+
+    Router.get( '/accesses/:model', async (req, res) => {
+      let accesses = await this.getAccesses(req.params.model, req)
+      res.send(accesses)
+    })
 
     return Router
   }
