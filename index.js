@@ -49,6 +49,12 @@ class Robogo {
     this.Logger                 = new Logger({ShowErrors, ShowWarnings, ShowLogs})
     this.Upload                 = null
 
+    this.RoboFileShema = this.GenerateSchema(RoboFileModel)
+    this.GenerateSchemas()
+    this.GenerateDecycledSchemas()
+    this.GeneratePathSchemas()
+    this.CollectHighestAccessesOfModels()
+
     if(FileDir)
       this.Upload = multer({dest: FileDir}) // multer will handle the saving of files, when one is uploaded
 
@@ -61,12 +67,6 @@ class Robogo {
         this.Services[ServiceName] = require(`${ServiceDir}/${ServiceFile}`)
       }
     }
-
-    this.RoboFileShema = this.GenerateSchema(RoboFileModel)
-    this.GenerateSchemas()
-    this.GenerateDecycledSchemas()
-    this.GeneratePathSchemas()
-    this.CollectHighestAccessesOfModels()
   }
 
 
