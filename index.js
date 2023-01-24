@@ -86,6 +86,7 @@ class Robogo {
         name: model.schema.options.name,
         accesslevel: model.schema.options.accesslevel || 0,
         props: model.schema.options.props || {},
+        model
       }
 
       this.Schemas[this.DefaultDBString][modelName] = this.GenerateSchema(model)
@@ -926,7 +927,7 @@ class Robogo {
       if(req.checkAccess && model.accesslevel > req.accesslevel)
         res.status(403).send()
       else
-        res.send({model: req.params.model, ...model})
+        res.send({...model, model: req.params.model})
     })
 
     Router.get( '/model', (req, res) => {
@@ -936,7 +937,7 @@ class Robogo {
         let model = this.Models[this.DefaultDBString][modelName]
         if(req.checkAccess && model.accesslevel > req.accesslevel) continue
 
-        models.push({model: modelName, ...model})
+        models.push({...model, model: modelName})
       }
 
       res.send(models)
