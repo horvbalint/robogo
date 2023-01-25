@@ -74,6 +74,12 @@ class Robogo {
       }
     }
 
+    this.RoboFileShema = this.GenerateSchema(RoboFileModel)
+    this.GenerateSchemas()
+    this.GenerateDecycledSchemas()
+    this.GeneratePathSchemas()
+    this.CollectHighestAccessesOfModels()
+
     if(FileDir)
       this.Upload = multer({dest: FileDir}) // multer will handle the saving of files, when one is uploaded
 
@@ -86,12 +92,6 @@ class Robogo {
         this.Services[ServiceName] = require(`${ServiceDir}/${ServiceFile}`)
       }
     }
-
-    this.RoboFileShema = this.GenerateSchema(RoboFileModel)
-    this.GenerateSchemas()
-    this.GenerateDecycledSchemas()
-    this.GeneratePathSchemas()
-    this.CollectHighestAccessesOfModels()
   }
 
 
@@ -108,6 +108,7 @@ class Robogo {
       let modelName = model.modelName || model.default.modelName
 
       this.Models[modelName] = {
+        model,
         name: model.schema.options.name,
         softwares: model.schema.options.softwares || [],
         props: model.schema.options.props || {},
@@ -1242,12 +1243,10 @@ class Robogo {
 
     // SPECIAL routes
     Router.get( '/model/:model', (req, res) => {
-      let model = this.Models[req.params.model]
-
       this.HasModelAccess(req.params.model, 'read', req)
         .then( hasAccess => {
           if(hasAccess)
-            res.send({model: req.params.model, ...model})
+            res.send({...this.Models[req.params.model], model: req.params.model})
           else
             res.status(403).send()
         })
@@ -1267,8 +1266,7 @@ class Robogo {
           for(let modelName in this.Models) {
             if(!results.shift()) continue
 
-            let model = this.Models[modelName]
-            models.push({model: modelName, ...model})
+            models.push({...this.Models[modelName], model: modelName})
           }
 
           res.send(models)
