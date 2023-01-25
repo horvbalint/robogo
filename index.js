@@ -1078,7 +1078,6 @@ class Robogo {
       async function responsePart(req, res, results) {
         if(req.checkAccess) await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
 
-
         res.send(results)
       }
 
@@ -1336,6 +1335,10 @@ class Robogo {
       }
 
       this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+    })
+
+    Router.get( '/accessesGroups', async (req, res) => {
+      res.send(Object.keys(this.AccessGroups))
     })
 
     Router.get( '/accesses/:model', async (req, res) => {
