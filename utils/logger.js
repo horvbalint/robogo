@@ -168,6 +168,46 @@ This is most likely just a typo, if not, please add the group to the array of de
 
     this.LogMessage('warning', occurrence, title, description)
   }
+
+  LogIncorrectAccessGroupSoftwareInField(modelName, fieldKey, accessGroup, accessGroupSoftwares, modelSoftwares, occurrence) {
+    let title = `INCORRECT ACCESS GROUP: '${accessGroup}'`
+    let description = `
+The access group '${accessGroup}' is used in the field '${fieldKey}' of the model '${modelName}', but they are not meant to be used with each other.
+The model has the following associated softwares: ${modelSoftwares},
+while the access group is meant to be used with the following softwares: ${accessGroupSoftwares}.
+This is likely an issue, if not, please add one of the model's softwares to the access group's possible software list in constructor of robogo.`
+
+    this.LogMessage('warning', occurrence, title, description)
+  }
+
+  LogIncorrectAccessGroupSoftwareInModel(modelName, accessGroup, accessGroupSoftwares, modelSoftwares, occurrence) {
+    let title = `INCORRECT ACCESS GROUP: '${accessGroup}'`
+    let description = `
+The access group '${accessGroup}' is used in the model '${modelName}', but they are not meant to be used with each other.
+The model has the following associated softwares: ${modelSoftwares},
+while the access group is meant to be used with the following softwares: ${accessGroupSoftwares}.
+This is likely an issue, if not, please add one of the model's softwares to the access group's possible software list in constructor of robogo.`
+
+    this.LogMessage('warning', occurrence, title, description)
+  }
+
+  LogUnknownSoftwareInModel(modelName, software, occurrence) {
+    let title = `UNKNOWN SOFTWARE: '${software}'`
+    let description = `
+There is an unknown software '${software}' used in the model '${modelName}'.
+This is most likely just a typo, if not, please add the software to the array of declared softwares in the constructor of robogo.`
+
+    this.LogMessage('warning', occurrence, title, description)
+  }
+
+  LogUnknownSoftwareInAccessGroup(accessGroup, software, occurrence) {
+    let title = `UNKNOWN SOFTWARE: '${software}'`
+    let description = `
+There is an unknown software '${software}' used in the access group '${accessGroup}'.
+This is most likely just a typo, if not, please add the software to the array of declared softwares in the constructor of robogo.`
+
+    this.LogMessage('warning', occurrence, title, description)
+  }
 }
 
 module.exports = Logger

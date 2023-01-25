@@ -21,7 +21,8 @@ class Robogo {
     CreateThumbnail = false,
     MaxThumbnailSize = 200,
     CheckAccess = true,
-    AccessGroups = [],
+    Softwares = [],
+    AccessGroups = {},
     AdminGroup = null,
     ShowErrors = true,
     ShowWarnings = true,
@@ -51,8 +52,27 @@ class Robogo {
     this.Upload                 = null
     this.GroupTypes             = {read: 'readGroups', write: 'writeGroups'}
     this.GuardTypes             = {read: 'readGuards', write: 'writeGuards'}
-    this.AccessGroups           = AccessGroups
+    this.Softwares              = Softwares
     this.AdminGroup             = AdminGroup
+
+    if(Array.isArray(AccessGroups)) {
+      this.AccessGroups = {}
+      
+      for(let group of AccessGroups) {
+        this.AccessGroups[group] = []
+      }
+    }
+    else {
+      this.AccessGroups = AccessGroups
+    }
+
+    for(let group in this.AccessGroups) {
+      for(let software of this.AccessGroups[group]) {
+        if(!this.Softwares.includes(software)) {
+          this.Logger.LogUnknownSoftwareInAccessGroup(group, software, `processing the access group '${group}'`)
+        }
+      }
+    }
 
     if(FileDir)
       this.Upload = multer({dest: FileDir}) // multer will handle the saving of files, when one is uploaded
@@ -87,27 +107,40 @@ class Robogo {
       let model = require(schemaPath)
       let modelName = model.modelName || model.default.modelName
 
-      this.Models[this.BaseDBString][modelName] = {
+      this.Models[modelName] = {
         name: model.schema.options.name,
+        softwares: model.schema.options.softwares || [],
         props: model.schema.options.props || {},
         highestAccesses: null,
         readGuards: model.schema.options.readGuards || [],
         writeGuards: model.schema.options.writeGuards || [],
       }
 
+      for(let software of this.Models[modelName].softwares) {
+        if(!this.Softwares.includes(software)) {
+          this.Logger.LogUnknownSoftwareInModel(modelName, software, `processing the model '${modelName}'`)
+        }
+      }
+
       for(let groupType of Object.values(this.GroupTypes)) {
         if(!model.schema.options[groupType]) continue
 
-        this.Models[this.BaseDBString][modelName][groupType] = model.schema.options[groupType]
+        this.Models[modelName][groupType] = model.schema.options[groupType]
 
         // we add the 'AdminGroup' to the accessGroups if it was not empty
-        if(this.AdminGroup) this.Models[this.BaseDBString][modelName][groupType].unshift(this.AdminGroup)
+        if(this.AdminGroup) this.Models[modelName][groupType].unshift(this.AdminGroup)
 
         // We check if an access group is used, that was not provided in the constructor,
         // if so we warn the developer, because it might be a typo.
-        for(let group of this.Models[this.BaseDBString][modelName][groupType]) {
-          if(!this.AccessGroups.includes(group)) {
+        for(let group of this.Models[modelName][groupType]) {
+          if(!this.AccessGroups[group]) {
             this.Logger.LogUnknownAccessGroupInModel(modelName, group, `processing the model '${modelName}'`)
+          }
+          else if(
+            this.AccessGroups[group].length && this.Models[modelName].softwares.length &&
+            !this.AccessGroups[group].some(software => this.Models[modelName].softwares.includes(software))
+          ) {
+            this.Logger.LogIncorrectAccessGroupSoftwareInModel(modelName, group, this.AccessGroups[group], this.Models[modelName].softwares, `processing the model '${modelName}'`)
           }
         }
       }
@@ -238,7 +271,7 @@ class Robogo {
         ref: modelName,
       })
 
-      this.Models[this.BaseDBString][modelName].highestAccesses = {
+      this.Models[modelName].highestAccesses = {
         read: accessesOfModel.read.map(ag => {ag.delete(null); return [...ag]}),
         write: accessesOfModel.write.map(ag => {ag.delete(null); return [...ag]})
       }
@@ -251,8 +284,8 @@ class Robogo {
    * @param {Object} field - A robogo field descriptor
    */
   CollectHighestAccessesOfModel(modelName, field) {
-    if(modelName && this.Models[this.BaseDBString][modelName].highestAccesses) // If this model was already calculated
-      return this.Models[this.BaseDBString][modelName].highestAccesses // then we return that result
+    if(modelName && this.Models[modelName].highestAccesses) // If this model was already calculated
+      return this.Models[modelName].highestAccesses // then we return that result
 
     if(!field.subfields || field.ref == 'RoboFile') return { // if the field is a 'leaf' then we return our accesses
       read: field.readGroups ? field.readGroups.map(a => new Set([a])) : [],
@@ -493,8 +526,14 @@ class Robogo {
       // We check if an access group is used, that was not provided in the constructor,
       // if so we warn the developer, because it might be a typo.
       for(let group of field[groupType]) {
-        if(!this.AccessGroups.includes(group)) {
+        if(!this.AccessGroups[group]) {
           this.Logger.LogUnknownAccessGroupInField(modelName, field.key, group, `processing the field '${modelName} -> ${field.key}'`)
+        }
+        else if(
+          this.AccessGroups[group].length && this.Models[modelName].softwares.length &&
+          !this.AccessGroups[group].some(software => this.Models[modelName].softwares.includes(software))
+        ) {
+          this.Logger.LogIncorrectAccessGroupSoftwareInField(modelName, field.key, group, this.AccessGroups[group], this.Models[modelName].softwares, `processing the field '${modelName} -> ${field.key}'`)
         }
       }
     }
@@ -728,14 +767,13 @@ class Robogo {
 
   HasModelAccess(model, mode, req) {
     let groupType = this.GroupTypes[mode]
-    let roboModel = this.Models[this.BaseDBString][model]
 
-    if(!this.HasGroupAccess(roboModel[groupType], req.accessGroups)) {
+    if(!this.HasGroupAccess(this.Models[model][groupType], req.accessGroups)) {
       return Promise.resolve(false)
     }
 
-    if(roboModel.accessGuards) {
-      let promises = roboModel.accessGuards.map(guard => Promisify(guard(req)))
+    if(this.Models[model].accessGuards) {
+      let promises = this.Models[model].accessGuards.map(guard => Promisify(guard(req)))
       return Promise.all(promises)
         .then( res => {
           if(res.some(r => !r)) return Promise.resolve(false)
@@ -983,7 +1021,7 @@ class Robogo {
    * @param {Array} accessGroups
    */
   hasEveryNeededAccessGroup(modelName, key, accessGroups) {
-    return this.Models[this.BaseDBString][modelName].highestAccesses[key].some(ag => ag.every(a => accessGroups.includes(a)))
+    return this.Models[modelName].highestAccesses[key].some(ag => ag.every(a => accessGroups.includes(a)))
   }
 
   /**
@@ -1204,7 +1242,7 @@ class Robogo {
 
     // SPECIAL routes
     Router.get( '/model/:model', (req, res) => {
-      let model = this.Models[this.BaseDBString][req.params.model]
+      let model = this.Models[req.params.model]
 
       this.HasModelAccess(req.params.model, 'read', req)
         .then( hasAccess => {
@@ -1217,7 +1255,7 @@ class Robogo {
 
     Router.get( '/model', (req, res) => {
       let promises = []
-      for(let modelName in this.Models[this.BaseDBString]) {
+      for(let modelName in this.Models) {
         let promise = this.HasModelAccess(modelName, 'read', req)
         promises.push(promise)
       }
@@ -1226,10 +1264,10 @@ class Robogo {
         .then( results => {
           let models = []
 
-          for(let modelName in this.Models[this.BaseDBString]) {
+          for(let modelName in this.Models) {
             if(!results.shift()) continue
 
-            let model = this.Models[this.BaseDBString][modelName]
+            let model = this.Models[modelName]
             models.push({model: modelName, ...model})
           }
 
