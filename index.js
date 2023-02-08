@@ -30,7 +30,7 @@ class Robogo {
   }) {
     this.MongooseConnection     = MongooseConnection
     this.BaseDBString        = String(MongooseConnection.connections[0]._connectionString)
-    this.Models                 = {[this.BaseDBString]: {}}
+    this.Models                 = {}
     this.Schemas                = {[this.BaseDBString]: {}}
     this.PathSchemas            = {}
     this.DecycledSchemas        = {}
