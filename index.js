@@ -504,8 +504,8 @@ class Robogo {
       field.name = field.name || Emb.options.name || null
       field.description = field.description || Emb.options.description || null
       field.props = field.props || Emb.options.props || {}
-      field.readGuards = [...field.readGuards, ...(Emb.options.readGuards || [])] // collecting all access groups without duplication
-      field.writeGuards = [...field.writeGuards, ...(Emb.options.writeGuards || [])] // collecting all access groups without duplication
+      field.readGuards = [...(field.readGuards || []), ...(Emb.options.readGuards || [])] // collecting all access groups without duplication
+      field.writeGuards = [...(field.writeGuards || []), ...(Emb.options.writeGuards || [])] // collecting all access groups without duplication
 
       if(!Emb.instance) field.subfields = []
       if(Emb.options.marked) field.marked = true
@@ -514,8 +514,8 @@ class Robogo {
       if(Emb.options.enum) field.enum = Emb.options.enum
       if(Emb.options.hasOwnProperty('default') && !field.default) field.default = Emb.options.default
       if(Emb.options.autopopulate) field.autopopulate = Emb.options.autopopulate
-      if(Emb.options.readGroups) field.readGroups = [...new Set([...field.readGroups, ...(Emb.options.readGroups || [])])] // collecting all access groups without duplication
-      if(Emb.options.writeGroups) field.writeGroups = [...new Set([...field.writeGroups, ...(Emb.options.writeGroups || [])])] // collecting all access groups without duplication
+      if(Emb.options.readGroups) field.readGroups = [...new Set([...(field.readGroups || []), ...(Emb.options.readGroups || [])])] // collecting all access groups without duplication
+      if(Emb.options.writeGroups) field.writeGroups = [...new Set([...(field.writeGroups || []), ...(Emb.options.writeGroups || [])])] // collecting all access groups without duplication
     }
 
     for(let groupType of Object.values(this.GroupTypes)) {
@@ -1087,7 +1087,7 @@ class Robogo {
     Router.get( '/get/:model/:id', (req, res) => {
       function mainPart(req, res) {
         return this.MongooseConnection.model(req.params.model)
-          .findOne({_id: req.params.id}, req.query.projection)
+          .findOne({_id: req.params.id, ...JSON.parse(req.query.filter || '{}')}, req.query.projection)
           .lean({ autopopulate: true, virtuals: true, getters: true })
       }
 
@@ -1342,8 +1342,15 @@ class Robogo {
     })
 
     Router.get( '/accesses/:model', async (req, res) => {
-      let accesses = await this.getAccesses(req.params.model, req)
-      res.send(accesses)
+      async function mainPart(req, res) {
+        return await this.getAccesses(req.params.model, req)
+      }
+
+      async function responsePart(req, res, result) {
+        res.send(result)
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
     })
 
     return Router
