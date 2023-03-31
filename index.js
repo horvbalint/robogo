@@ -23,7 +23,7 @@ class Robogo {
     CheckAccess = true,
     Softwares = [],
     AccessGroups = {},
-    AdminGroup = null,
+    AdminGroups = null,
     ShowErrors = true,
     ShowWarnings = true,
     ShowLogs = true,
@@ -53,7 +53,7 @@ class Robogo {
     this.GroupTypes             = {read: 'readGroups', write: 'writeGroups'}
     this.GuardTypes             = {read: 'readGuards', write: 'writeGuards'}
     this.Softwares              = Softwares
-    this.AdminGroup             = AdminGroup
+    this.AdminGroups             = AdminGroups
 
     if(Array.isArray(AccessGroups)) {
       this.AccessGroups = {}
@@ -128,8 +128,22 @@ class Robogo {
 
         this.Models[modelName][groupType] = model.schema.options[groupType]
 
-        // we add the 'AdminGroup' to the accessGroups if it was not empty
-        if(this.AdminGroup) this.Models[modelName][groupType].unshift(this.AdminGroup)
+        // we add the 'AdminGroups' to the accessGroups if it was not empty
+        if(this.AdminGroups) {
+          if(Array.isArray(this.AdminGroups)) 
+            this.Models[modelName][groupType].unshift(...this.AdminGroups)
+          
+          else if(typeof this.AdminGroups == 'object') {
+            for(let software of this.Models[modelName].softwares) {
+              if(!this.AdminGroups[software]) continue
+
+              this.Models[modelName][groupType].unshift(...this.AdminGroups[software])
+            }
+          }
+
+          else 
+            this.Logger.LogIncorrectAdminGroups(this.AdminGroups, `processing the admin groups of the model '${modelName}'`) 
+        }
 
         // We check if an access group is used, that was not provided in the constructor,
         // if so we warn the developer, because it might be a typo.
@@ -521,8 +535,23 @@ class Robogo {
     for(let groupType of Object.values(this.GroupTypes)) {
       if(!field[groupType]) continue
 
-      // we add the 'AdminGroup' to the accessGroups if it was not empty
-      if(this.AdminGroup) field[groupType].unshift(this.AdminGroup)
+      // we add the 'AdminGroups' to the accessGroups if it was not empty
+      if(this.AdminGroups) {
+        if(Array.isArray(this.AdminGroups)) 
+          field[groupType].unshift(...this.AdminGroups)
+        
+        else if(typeof this.AdminGroups == 'object') {
+          for(let software of this.Models[modelName].softwares) {
+            if(!this.AdminGroups[software]) continue
+
+            field[groupType].unshift(...this.AdminGroups[software])
+          }
+        }
+
+        else 
+          this.Logger.LogIncorrectAdminGroups(this.AdminGroups, `processing the admin groups of the field '${modelName} -> ${field.key}'`) 
+      }
+
 
       // We check if an access group is used, that was not provided in the constructor,
       // if so we warn the developer, because it might be a typo.
