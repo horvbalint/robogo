@@ -1338,15 +1338,8 @@ class Robogo {
     })
 
     Router.get( '/accessesGroups', (req, res) => {
-      async function mainPart(req, res) {
-        return Object.keys(this.AccessGroups)
-      }
-
-      async function responsePart(req, res, result) {
-        res.send(result)
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+      let result = Object.keys(this.AccessGroups)
+      res.send(result)
     })
 
     Router.get( '/accesses/:model', (req, res) => {
