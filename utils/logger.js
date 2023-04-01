@@ -46,6 +46,17 @@ This might be intentional, if not, declare the missing model or check, if:
     this.LogMessage('warning', occurrence, title, description)
   }
 
+  LogIncorrectAdminGroups(adminGroups, occurrence) {
+    let title = `INCORRECT ADMIN GROUPS: '${adminGroups}'`
+    let description = `
+The admin groups property '${adminGroups}' has a wrong type.
+The admin groups property's type should be one of:
+  • Array (eg.: ['adminGroup1', 'adminGroup2'])
+  • Object (eg.: {software1: ['adminGroup1', 'adminGroup2'], software2: ['adminGroup1']})`
+
+    this.LogMessage('warning', occurrence, title, description)
+  }
+
   LogMissingModel(modelName, occurrence) {
     let title = `MISSING MODEL: '${modelName}'`
     let description = `
