@@ -1279,6 +1279,8 @@ class Robogo {
       Router.delete( '/filedelete/:id', (req, res) => {
         RoboFileModel.findOne({_id: req.params.id})
           .then( file => {
+            if(!file) return Promise.reject('Unkown file')
+
             // we remove both the file and thumbnail if they exists
             let realPath = path.resolve(this.FileDir, file.path)
             if(!realPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
@@ -1293,6 +1295,8 @@ class Robogo {
             // we delete the RoboFile document
             return RoboFileModel.deleteOne({_id: file._id})
           })
+          .then( () => res.send() )
+          .catch( err => res.status(400).send(err) )
       })
     }
     // --------------
