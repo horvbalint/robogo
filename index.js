@@ -1249,22 +1249,50 @@ class Robogo {
         })
       })
 
+      Router.post( '/fileclone/:id', (req, res) => {
+        RoboFileModel.findOne({_id: req.params.id}).lean()
+          .then( roboFile => {
+            let realPath = path.resolve(this.FileDir, roboFile.path)
+            if(!realPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH')
+
+            let copyRealPath = realPath.replace('.', '_copy.')
+            if(fs.existsSync(realPath)) fs.copyFileSync(realPath, copyRealPath)
+            
+            if(roboFile.thumbnailPath) {
+              let thumbnailPath = path.resolve(this.FileDir, roboFile.thumbnailPath)
+              if(!thumbnailPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH')
+
+              let copyThumbnailPath = thumbnailPath.replace('.', '_copy.')
+              if(fs.existsSync(thumbnailPath)) fs.copyFileSync(thumbnailPath, copyThumbnailPath)
+            }
+ 
+            delete roboFile._id
+            roboFile.path = roboFile.path.replace('.', '_copy.')
+            roboFile.thumbnailPath = roboFile.thumbnailPath.replace('.', '_copy.')
+ 
+            return RoboFileModel.create(roboFile)
+          })
+          .then( file => res.send(file) )
+          .catch( err => res.status(500).send(err) )
+      })
+
       Router.delete( '/filedelete/:id', (req, res) => {
         RoboFileModel.findOne({_id: req.params.id})
           .then( file => {
-            let realPath = path.resolve(this.FileDir, file.path)
-            let thumbnailPath = realPath.replace('.', '_thumbnail.')
-            if(!realPath.startsWith(this.FileDir)) return res.status(500).send('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
-
             // we remove both the file and thumbnail if they exists
+            let realPath = path.resolve(this.FileDir, file.path)
+            if(!realPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
             if(fs.existsSync(realPath)) fs.unlinkSync(realPath)
-            if(fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath)
+
+            if(file.thumbnailPath) {
+              let thumbnailPath = path.resolve(this.FileDir, file.thumbnailPath)
+              if(!thumbnailPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
+              if(fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath)
+            }
 
             // we delete the RoboFile document
             return RoboFileModel.deleteOne({_id: file._id})
           })
-          .then( () => res.send() )
-          .catch( err => res.status(500).send(err) )
       })
     }
     // --------------
