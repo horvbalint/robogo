@@ -762,7 +762,7 @@ class Robogo {
     // if the model is unkown send an error
     if(!this.Schemas[this.BaseDBString][req.params.model]) {
       this.Logger.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
-      return res.status(500).send('MISSING MODEL')
+      return res.status(400).send('MISSING MODEL')
     }
 
     let mode = 'read'
@@ -776,6 +776,18 @@ class Robogo {
     const MiddlewareFunctions = this.Middlewares[req.params.model][operation]
     MiddlewareFunctions.before.call(this, req, res)
       .then( () => {
+        if(req.accessGroups === undefined)
+          req.accessGroups = []
+
+        if(req.checkAccess === undefined)
+          req.checkAccess = this.CheckAccess
+
+        if(req.checkReadAccess === undefined)
+          req.checkReadAccess = req.checkAccess
+
+        if(req.checkWriteAccess === undefined)
+          req.checkWriteAccess = req.checkAccess
+
         this.HasModelAccess(req.params.model, mode, req)
           .then( hasAccess => {
             if(!hasAccess) return res.status(403).send()
@@ -798,6 +810,11 @@ class Robogo {
   HasModelAccess(model, mode, req) {
     let groupType = this.GroupTypes[mode]
 
+    if(mode == 'read' && !req.checkReadAccess)
+      return Promise.resolve(true)
+    if(mode == 'write' && !req.checkWriteAccess)
+      return Promise.resolve(true)
+
     if(!this.HasGroupAccess(this.Models[model][groupType], req.accessGroups)) {
       return Promise.resolve(false)
     }
@@ -805,9 +822,7 @@ class Robogo {
     if(this.Models[model].accessGuards) {
       let promises = this.Models[model].accessGuards.map(guard => Promisify(guard(req)))
       return Promise.all(promises)
-        .then( res => {
-          if(res.some(r => !r)) return Promise.resolve(false)
-        })
+        .then( res => !res.some(r => !r) )
     }
 
     return Promise.resolve(true)
@@ -878,6 +893,9 @@ class Robogo {
   }
 
   IsFieldDeclined(field, mode, accessGroups, req, checkGroupAccess = true) {
+    let shouldCheckAccess = mode == 'read' ? req.checkReadAccess : req.checkWriteAccess
+    if(!shouldCheckAccess) return Promise.resolve(false)
+
     let groupType = this.GroupTypes[mode]
     if(checkGroupAccess) {
       if(!this.HasGroupAccess(field[groupType], accessGroups)) {
@@ -922,7 +940,7 @@ class Robogo {
           if(field.subfields) {
             let fieldsOrModel = fields.ref || field.subfields
 
-            let promise = this.RemoveDeclinedFieldsFromSchema(fieldsOrModel, 'read', req)
+            let promise = this.RemoveDeclinedFieldsFromSchema(fieldsOrModel, req)
             promises.push(promise)
           }
 
@@ -970,7 +988,7 @@ class Robogo {
 
         return Promise.all(fieldPromises)
       })
-      .then( ([[canReadAllRequired, read], [canWritAllRequired, write]]) => {
+      .then( ([[canReadAllRequired, read], [canWriteAllRequired, write]]) => {
         accesses.fields = {}
 
         // we merge the read and write accesses into one object
@@ -991,7 +1009,7 @@ class Robogo {
           delete accesses.fields[path]
         }
 
-        accesses.model.writeAllRequired = accesses.model.write && canWritAllRequired
+        accesses.model.writeAllRequired = accesses.model.write && canWriteAllRequired
 
         return accesses
       })
@@ -1058,20 +1076,10 @@ class Robogo {
    * Generates all the routes of robogo and returns the express router.
    */
   GenerateRoutes() {
-    // Middleware that adds default values to robogo properties if they were not specified
-    Router.use( (req, _, next) => {
-      if(req.accessGroups === undefined)
-        req.accessGroups = []
-
-      if(req.checkAccess === undefined)
-        req.checkAccess = this.CheckAccess
-
-      next()
-    })
     // CREATE routes
     Router.post( '/create/:model', (req, res) => {
       async function mainPart(req, res) {
-        if(req.checkAccess)
+        if(req.checkWriteAccess)
           await this.RemoveDeclinedFieldsFromObject(req.params.model, req.body, 'write', req)
 
         const Model = this.MongooseConnection.model(req.params.model)
@@ -1082,7 +1090,7 @@ class Robogo {
       async function responsePart(req, res, result) {
         result = result.toObject() // this is needed, because mongoose returns an immutable object by default
 
-        if(req.checkAccess)
+        if(req.checkReadAccess)
           await this.RemoveDeclinedFieldsFromObject(req.params.model, result, 'read', req)
 
         res.send(result)
@@ -1105,7 +1113,7 @@ class Robogo {
       }
 
       async function responsePart(req, res, results) {
-        if(req.checkAccess) await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
+        if(req.checkReadAccess) await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
 
         res.send(results)
       }
@@ -1121,7 +1129,7 @@ class Robogo {
       }
 
       async function responsePart(req, res, result) {
-        if(req.checkAccess)
+        if(req.checkReadAccess)
           await this.RemoveDeclinedFieldsFromObject(req.params.model, result, 'read', req)
 
         res.send(result)
@@ -1173,7 +1181,7 @@ class Robogo {
     // UPDATE routes
     Router.patch( '/update/:model', (req, res) => {
       async function mainPart(req, res) {
-        if(req.checkAccess)
+        if(req.checkWriteAccess)
           await this.RemoveDeclinedFieldsFromObject(req.params.model, req.body, 'write', req)
 
         return this.MongooseConnection.model(req.params.model)
@@ -1303,16 +1311,33 @@ class Robogo {
 
     // SPECIAL routes
     Router.get( '/model/:model', (req, res) => {
-      this.HasModelAccess(req.params.model, 'read', req)
-        .then( hasAccess => {
-          if(hasAccess)
-            res.send({...this.Models[req.params.model], model: req.params.model})
-          else
-            res.status(403).send()
-        })
+      async function mainPart(req, res) {
+        return await this.HasModelAccess(req.params.model, 'read', req)
+      }
+
+      async function responsePart(req, res, hasAccess) {
+        if(!req.checkReadAccess || hasAccess)
+          res.send({...this.Models[req.params.model], model: req.params.model})
+        else
+          res.status(403).send()
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
     })
 
     Router.get( '/model', (req, res) => {
+      if(req.accessGroups === undefined)
+        req.accessGroups = []
+
+      if(req.checkAccess === undefined)
+        req.checkAccess = this.CheckAccess
+
+      if(req.checkReadAccess === undefined)
+        req.checkReadAccess = req.checkAccess
+
+      if(req.checkWriteAccess === undefined)
+        req.checkWriteAccess = req.checkAccess
+
       let promises = []
       for(let modelName in this.Models) {
         let promise = this.HasModelAccess(modelName, 'read', req)
@@ -1324,7 +1349,7 @@ class Robogo {
           let models = []
 
           for(let modelName in this.Models) {
-            if(!results.shift()) continue
+            if(req.checkReadAccess && !results.shift()) continue
 
             models.push({...this.Models[modelName], model: modelName})
           }
@@ -1339,7 +1364,7 @@ class Robogo {
       }
 
       async function responsePart(req, res, result) {
-        if(req.checkAccess)
+        if(req.checkReadAccess)
           result = await this.RemoveDeclinedFieldsFromSchema(result, req)
 
         res.send(result)
@@ -1399,6 +1424,18 @@ class Robogo {
     })
 
     Router.get( '/accessesGroups', (req, res) => {
+      if(req.accessGroups === undefined)
+        req.accessGroups = []
+
+      if(req.checkAccess === undefined)
+        req.checkAccess = this.CheckAccess
+
+      if(req.checkReadAccess === undefined)
+        req.checkReadAccess = req.checkAccess
+
+      if(req.checkWriteAccess === undefined)
+        req.checkWriteAccess = req.checkAccess
+
       let result = Object.keys(this.AccessGroups)
       res.send(result)
     })
