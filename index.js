@@ -1,3 +1,4 @@
+const mongoose      = require('mongoose')
 const express       = require('express')
 const multer        = require('multer')
 const sharp         = require('sharp')
@@ -11,7 +12,7 @@ const Router = express.Router()
 
 class Robogo {
   constructor({
-    MongooseConnection = require('mongoose'),
+    MongooseConnection = mongoose,
     SchemaDir,
     ServiceDir = null,
     FileDir = null,
@@ -29,7 +30,7 @@ class Robogo {
     ShowLogs = true,
   }) {
     this.MongooseConnection     = MongooseConnection
-    this.BaseDBString        = String(MongooseConnection.connections[0]._connectionString)
+    this.BaseDBString           = String(MongooseConnection.connections[0]._connectionString)
     this.Models                 = {}
     this.Schemas                = {[this.BaseDBString]: {}}
     this.PathSchemas            = {}
@@ -53,7 +54,7 @@ class Robogo {
     this.GroupTypes             = {read: 'readGroups', write: 'writeGroups'}
     this.GuardTypes             = {read: 'readGuards', write: 'writeGuards'}
     this.Softwares              = Softwares
-    this.AdminGroups             = AdminGroups
+    this.AdminGroups            = AdminGroups
 
     if(Array.isArray(AccessGroups)) {
       this.AccessGroups = {}
@@ -358,39 +359,7 @@ class Robogo {
   }
 
   /**
-   * Recursively collects access groups from tree to array without duplications
-   * @param {Object} accesTree
-   * @returns {{read: Array, write: Array}}
-   */
-  createAccessGroupFromTree(accessTree, accessArray = new Set()) {
-    if(!Object.keys(accessTree).length) return [...accessArray]
-
-    for(let [node, subTree] of Object.entries(accessTree)) {
-      accessArray.add(node)
-      this.createAccessGroupFromTree(subTree, accessArray)
-    }
-
-    return [...accessArray]
-  }
-
-  /**
-   * Recursively collects access groups from tree to array without duplications
-   * @param {Object} accesTree
-   * @returns {{read: Array, write: Array}}
-   */
-  createAccessGroupFromTree(accessTree, accessArray = new Set()) {
-    if(!Object.keys(accessTree).length) return [...accessArray]
-
-    for(let [node, subTree] of Object.entries(accessTree)) {
-      accessArray.add(node)
-      this.createAccessGroupFromTree(subTree, accessArray)
-    }
-
-    return [...accessArray]
-  }
-
-  /**
-   * Returns the field paths of a model that are safe to be used with fuse.js.
+   * Returns the field paths of a model that are safe to be used with fuse.js. JSDoc
    * @param {(String|Array)} schema
    * @param {Number} [maxDepth=Infinity]
    */
@@ -428,7 +397,7 @@ class Robogo {
   /**
    * Recursively creates an object with entries of field path and mongoose field descriptors
    * @param {Object} schema - A mongoose schema
-   * @param {Obejct} [acc] - This parameter should be leaved empty
+   * @param {Object} [acc] - This parameter should be leaved empty
    * @param {String} [prefix] - This parameter should be leaved empty
    */
   GetPaths(schema, acc = {}, prefix = '') {
@@ -628,7 +597,7 @@ class Robogo {
     }
 
     for(const fObj of field.subfields)
-      this.plugInFieldRef(fObj)
+      this.plugInFieldRef(fObj, field.ref || modelName)
   }
 
   /**
@@ -831,8 +800,9 @@ class Robogo {
    * Removes every field from an array of documents, which need an access group not included in then given parameter.
    * @param {String|Array} fields
    * @param {Array} documents
-   * @param {Number} [accessGroups]
-   * @param {String} [authField='readGroups']
+   * @param {String} mode
+   * @param {Object} req
+   * @param {String} [DBString=this.BaseDBString]
    */
   async RemoveDeclinedFields(fields, documents, mode, req, DBString = this.BaseDBString) {
     let model = null
@@ -841,12 +811,24 @@ class Robogo {
       fields = this.Schemas[DBString][model]
     }
 
-    let guardPreCache = await this.calculateGuardPreCache(req, fields, mode, 'RemoveDeclinedFields')
+    let guardPreCache = await this.calculateGuardPreCache(req, fields, mode)
     let promises = documents.map(doc => this.RemoveDeclinedFieldsFromObject({fields, object: doc, mode, req, guardPreCache}))
 
     return Promise.all(promises)
   }
 
+  /**
+   * Removes declined fields from an object.
+   * @async
+   * @param {Object} params
+   * @param {Array|String} params.fields
+   * @param {Object} params.object
+   * @param {String} params.mode
+   * @param {Object} params.req
+   * @param {String} [params.DBString=this.BaseDBString]
+   * @param {Map?} [params.guardPreCache=null]
+   * @returns {Promise}
+   */
   async RemoveDeclinedFieldsFromObject({fields, object, mode, req, DBString = this.BaseDBString, guardPreCache = null}) { // todo update everywhere to obejct params
     if(!object) return Promise.resolve(object)
 
@@ -862,7 +844,7 @@ class Robogo {
     let checkGroupAccess = !model || !this.hasEveryNeededAccessGroup(model, mode, req.accessGroups)
     let promises = []
 
-    guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fieldsInObj, mode, 'RemoveDeclinedFieldsFromObject')
+    guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fieldsInObj, mode)
     for(let field of fieldsInObj) {
       let promise = this.IsFieldDeclined({req, field, mode, checkGroupAccess, guardPreCache})
         .then( declined => {
@@ -870,7 +852,7 @@ class Robogo {
             delete object[field.key]
           }
           else if(field.subfields) {
-            let fieldsOrModel = fields.ref || field.subfields
+            let fieldsOrModel = (field.ref && field.ref != 'RoboFile') ? field.ref : field.subfields
 
             if(Array.isArray(object[field.key])) {
               let subPromises = object[field.key].map(obj => this.RemoveDeclinedFieldsFromObject({fields: fieldsOrModel, object: obj, mode, req, guardPreCache, DBString: field.DBString}))
@@ -912,6 +894,16 @@ class Robogo {
     return preCache
   }
 
+  /**
+   * Checks if a field is declined based on specified parameters.
+   * @param {Object} params
+   * @param {Object} params.req
+   * @param {Object} params.field
+   * @param {String} params.mode
+   * @param {Boolean} [params.checkGroupAccess=true]
+   * @param {Map?} [params.guardPreCache=null]
+   * @returns {Promise<Boolean>}
+   */
   IsFieldDeclined({req, field, mode, checkGroupAccess = true, guardPreCache = null}) {
     let shouldCheckAccess = mode == 'read' ? req.checkReadAccess : req.checkWriteAccess
     if(!shouldCheckAccess) return Promise.resolve(false)
@@ -926,6 +918,14 @@ class Robogo {
     return this.IsFieldDecliendByGuards(req, field, this.GuardTypes[mode], guardPreCache)
   }
 
+  /**
+ * Checks if a field is declined by guards.
+ * @param {Object} req 
+ * @param {Object} field
+ * @param {String} guardType
+ * @param {Map?} [guardPreCache=null]
+ * @returns {Promise<boolean>}
+ */
   IsFieldDecliendByGuards(req, field, guardType, guardPreCache = null) {
     if(!field[guardType].length) return Promise.resolve(false)
 
@@ -941,7 +941,7 @@ class Robogo {
       .catch( () => true )
   }
 
-  async RemoveDeclinedFieldsFromSchema(fields, req) {
+  async RemoveDeclinedFieldsFromSchema(fields, req, mode) {
     let model = null
     if(typeof fields == 'string') { // if model name was given, then we get the models fields
       model = fields
@@ -950,21 +950,21 @@ class Robogo {
 
     if(!fields.length) return Promise.resolve(fields)
 
-    let checkGroupAccess = !model || !this.hasEveryNeededAccessGroup(model, 'read', req.accessGroups)
+    let checkGroupAccess = !model || !this.hasEveryNeededAccessGroup(model, mode, req.accessGroups)
     let fieldPromises = []
 
-    let guardPreCache = await this.calculateGuardPreCache(req, fields, 'read')
+    let guardPreCache = await this.calculateGuardPreCache(req, fields, mode)
     for(let field of fields) {
-      let promise = this.IsFieldDeclined({req, field, mode: 'read', checkGroupAccess, guardPreCache})
+      let promise = this.IsFieldDeclined({req, field, mode, checkGroupAccess, guardPreCache})
         .then( declined => {
           if(declined) return Promise.reject()
 
           let promises = [{...field}]
 
           if(field.subfields) {
-            let fieldsOrModel = fields.ref || field.subfields
+            let fieldsOrModel = field.ref || field.subfields
 
-            let promise = this.RemoveDeclinedFieldsFromSchema(fieldsOrModel, req)
+            let promise = this.RemoveDeclinedFieldsFromSchema(fieldsOrModel, req, mode)
             promises.push(promise)
           }
 
@@ -1002,9 +1002,10 @@ class Robogo {
         for(let mode of ['read', 'write']) {
           let promise = Promise.resolve([])
 
-          let checkGroupAccess = !this.hasEveryNeededAccessGroup(model, mode, req.accessGroups)
-          if(accesses.model[mode])
+          if(accesses.model[mode]) {
+            let checkGroupAccess = !this.hasEveryNeededAccessGroup(model, mode, req.accessGroups)
             promise = this.getFieldAccesses({fields: schema, mode, req, checkGroupAccess})
+          }
 
           fieldPromises.push(promise)
         }
@@ -1038,7 +1039,20 @@ class Robogo {
       })
   }
 
-  async getFieldAccesses({fields, mode, req, checkGroupAccess, accesses = {}, prefix = '', guardPreCache}) {
+  /**
+   * Retrieves field accesses based on specified parameters.
+   * @async
+   * @param {Object} params - The parameters for retrieving field accesses.
+   * @param {Array} params.fields - The array of fields to retrieve accesses for.
+   * @param {String} params.mode - The mode specifying the retrieval behavior.
+   * @param {Object} params.req - The request object associated with the operation.
+   * @param {Boolean} [params.checkGroupAccess] - Flag indicating whether to check group access.
+   * @param {Object} [params.accesses={}] - The object to store the retrieved accesses.
+   * @param {String} [params.prefix=''] - The prefix for field names.
+   * @param {Map?} [params.guardPreCache=null] - The pre-cache guard object.
+   * @returns {Promise} A Promise that resolves with the retrieved field accesses.
+   */
+  async getFieldAccesses({fields, mode, req, checkGroupAccess, accesses = {}, prefix = '', guardPreCache = null}) {
     guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fields, mode)
     
     let promises = fields.map(field => this.IsFieldDeclined({req, field, mode, checkGroupAccess, guardPreCache}))
@@ -1067,7 +1081,7 @@ class Robogo {
 
   /**
    * A helper function, that is a template for Service routes.
-   * @param {Obejct} req
+   * @param {Object} req
    * @param {Object} res
    * @param {String} paramsKey
    */
@@ -1089,7 +1103,7 @@ class Robogo {
 
   /**
    * Checks if models highest accesses contains an access group whose all elements are in the users accesses
-   * @param {String} model
+   * @param {String} modelName
    * @param {String} key
    * @param {Array} accessGroups
    */
@@ -1197,7 +1211,7 @@ class Robogo {
           let schema = this.DecycledSchemas[req.params.model]
 
           if(req.checkReadAccess)
-            schema = await this.RemoveDeclinedFieldsFromSchema(schema, req)
+            schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
 
           req.query.keys = this.GetSearchKeys(schema, req.query.depth)
         }
@@ -1237,11 +1251,10 @@ class Robogo {
     // DELETE routes
     Router.delete( '/delete/:model/:id', (req, res) => {
       async function mainPart() {
-        let fields = this.DecycledSchemas[req.params.model]
-        let remainingFields = await this.RemoveDeclinedFieldsFromSchema(req.params.model, req)
+        const accesses = await this.getAccesses(req.params.model, req)
 
-        if(JSON.stringify(fields) !== JSON.stringify(remainingFields))
-          return res.status(403).send()
+        if(!accesses.model.write || Object.values(accesses.fields).some(({write}) => !write))
+          return Promise.reject("FORBIDDEN")
 
         return this.MongooseConnection.model(req.params.model)
           .deleteOne({_id: req.params.id})
@@ -1391,7 +1404,7 @@ class Robogo {
 
       async function responsePart(req, res, result) {
         if(req.checkReadAccess)
-          result = await this.RemoveDeclinedFieldsFromSchema(result, req)
+          result = await this.RemoveDeclinedFieldsFromSchema(result, req, 'read')
 
         res.send(result)
       }
@@ -1404,7 +1417,7 @@ class Robogo {
         let schema = this.DecycledSchemas[req.params.model]
 
         if(req.checkReadAccess)
-          schema = await this.RemoveDeclinedFieldsFromSchema(schema, req)
+          schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
 
         let fields = this.GetFields(schema, req.query.depth)
         return fields
@@ -1437,7 +1450,7 @@ class Robogo {
         let schema = this.DecycledSchemas[req.params.model]
 
         if(req.checkReadAccess)
-          schema = await this.RemoveDeclinedFieldsFromSchema(schema, req)
+          schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
 
         return this.GetSearchKeys(schema, req.query.depth)
       }
