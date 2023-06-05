@@ -962,9 +962,7 @@ class Robogo {
           let promises = [{...field}]
 
           if(field.subfields) {
-            let fieldsOrModel = field.ref || field.subfields
-
-            let promise = this.RemoveDeclinedFieldsFromSchema(fieldsOrModel, req, mode)
+            let promise = this.RemoveDeclinedFieldsFromSchema(field.subfields, req, mode) // IMPROVEMENT: we should pass the field.ref to the recursion, so it can optimize more, but it should be passed alongside the fields so we don't get into a infinite loop.
             promises.push(promise)
           }
 
