@@ -116,6 +116,7 @@ class Robogo {
         highestAccesses: null,
         readGuards: model.schema.options.readGuards || [],
         writeGuards: model.schema.options.writeGuards || [],
+        defaultFilter: model.schema.options.defaultFilter || {},
       }
 
       for(let software of this.Models[modelName].softwares) {
@@ -459,6 +460,10 @@ class Robogo {
    */
   GenerateSchemaField(fieldKey, fieldDescriptor, modelName) {
     // we basically collect the information we know about the field
+    const softDeletedOn = fieldDescriptor.options.softDelete
+    if(softDeletedOn !== undefined)
+      this.Models[modelName].defaultFilter[fieldKey] = {$ne: softDeletedOn}
+
     let field = {
       key: fieldKey,
       isArray: fieldDescriptor.instance == 'Array',
@@ -1109,6 +1114,75 @@ class Robogo {
     return this.Models[modelName].highestAccesses[key].some(ag => ag.every(a => accessGroups.includes(a)))
   }
 
+  async visitFilter({filter, groupVisitor = () => {}, conditionVisitor = (_path, value) => value}) {
+    const result = {}
+    const promises = []
+
+    for(const outerKey in filter) {
+      if(outerKey == '$and' || outerKey == '$or') {
+        const conditionPromises = filter[outerKey].map(condition => this.visitFilter({filter: condition, groupVisitor, conditionVisitor}))
+        const conditions = await Promise.all(conditionPromises)
+
+        const promise = Promisify(groupVisitor(conditions) )
+          .then(value => result[outerKey] = value)
+
+        promises.push(promise)
+      }
+      else {
+        const promise = Promisify(conditionVisitor(outerKey, filter[outerKey]))
+          .then(value => result[outerKey] = value)
+
+        promises.push(promise)
+      }
+    }
+
+    await Promise.allSettled(promises)
+    return result
+  }
+
+  async extendFilterWithDefaults(modelName, filter) {
+    const defaultFilter = this.Models[modelName].defaultFilter
+
+    if(!Object.keys(defaultFilter).length)
+      return {...filter}
+
+    const defaultFilterCopy = JSON.parse(JSON.stringify(defaultFilter)) 
+    await this.visitFilter({
+      filter,
+      conditionVisitor: path => delete defaultFilterCopy[path]
+    })
+
+    return {...defaultFilterCopy, ...filter}
+  }
+
+  async removeDeclinedFieldsFromFilter(req, filter) {
+    return await this.visitFilter({
+      filter,
+      groupVisitor: results => {
+        const conditions = results.filter(result => Object.keys(result).length)
+        if(!conditions.length)
+          return Promise.reject()
+
+        return conditions
+      },
+      conditionVisitor: async (path, value) => {
+        let isDeclined = await this.IsFieldDeclined({req, field: this.PathSchemas[req.params.model][path], mode: 'read'})
+        if(isDeclined)
+          return Promise.reject()
+        
+        return value
+      }
+    })
+  }
+
+  async processFilter(req) {
+    const originalFilter = JSON.parse(req.query.filter || '{}')
+    const extendedFilter = await this.extendFilterWithDefaults(req.params.model, originalFilter)
+    const checkedFilter = await this.removeDeclinedFieldsFromFilter(req, extendedFilter)
+
+    return checkedFilter
+  }
+
   /**
    * Generates all the routes of robogo and returns the express router.
    */
@@ -1153,9 +1227,11 @@ class Robogo {
     // READ routes
     // these routes will use "lean" so that results are not immutable
     Router.get( '/read/:model', (req, res) => {
-      function mainPart(req, res) {
+      async function mainPart(req, res) {
+        const filter = await this.processFilter(req)
+
         return this.MongooseConnection.model(req.params.model)
-          .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
+          .find( filter, req.query.projection )
           .sort( JSON.parse(req.query.sort || '{}') )
           .skip( Number(req.query.skip) || 0 )
           .limit( Number(req.query.limit) || null )
@@ -1172,9 +1248,11 @@ class Robogo {
     })
 
     Router.get( '/get/:model/:id', (req, res) => {
-      function mainPart(req, res) {
+      async function mainPart(req, res) {
+        const filter = await this.processFilter(req)
+
         return this.MongooseConnection.model(req.params.model)
-          .findOne({_id: req.params.id, ...JSON.parse(req.query.filter || '{}')}, req.query.projection)
+          .findOne({_id: req.params.id, ...filter}, req.query.projection)
           .lean({ autopopulate: true, virtuals: true, getters: true })
       }
 
@@ -1189,9 +1267,11 @@ class Robogo {
     })
 
     Router.get( '/search/:model', (req, res) => {
-      function mainPart(req, res) {
+      async function mainPart(req, res) {
+        const filter = await this.processFilter(req)
+
         return this.MongooseConnection.model(req.params.model)
-          .find( JSON.parse(req.query.filter || '{}'), req.query.projection )
+          .find( filter, req.query.projection )
           .lean({ autopopulate: true, virtuals: true, getters: true })
       }
 
@@ -1429,11 +1509,11 @@ class Robogo {
     })
 
     Router.get( '/count/:model', (req, res) => {
-      function mainPart(req, res) {
-        if(!req.query.filter) req.query.filter = '{}'
+      async function mainPart(req, res) {
+        const filter = await this.processFilter(req)
 
         return this.MongooseConnection.model(req.params.model)
-          .countDocuments(JSON.parse(req.query.filter))
+          .countDocuments(filter)
       }
 
       async function responsePart(req, res, result) {
