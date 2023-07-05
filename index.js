@@ -182,7 +182,7 @@ class Robogo {
 
   ObjectifySortValue(sortValue) {
     if(Array.isArray(sortValue))
-      return Object.fromEntries(sortValue)
+      return Object.fromEntries([sortValue]) // TODO: find out why this extra array is needed (why the originally sent [[]] arrives as [])
 
     if(typeof sortValue === 'object')
       return sortValue
@@ -1274,6 +1274,7 @@ class Robogo {
       async function mainPart(req, res) {
         const filter = await this.processFilter(req)
         const sort = await this.processSort(req)
+        console.log(sort)
 
         return this.MongooseConnection.model(req.params.model)
           .find( filter, req.query.projection )
