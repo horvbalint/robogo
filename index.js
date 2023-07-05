@@ -117,6 +117,7 @@ class Robogo {
         readGuards: model.schema.options.readGuards || [],
         writeGuards: model.schema.options.writeGuards || [],
         defaultFilter: model.schema.options.defaultFilter || {},
+        defaultSort: this.ObjectifySortValue(model.schema.options.defaultSort || {}),
       }
 
       for(let software of this.Models[modelName].softwares) {
@@ -177,6 +178,28 @@ class Robogo {
       for(let modelName in this.Schemas[DBString])
         for(let field of this.Schemas[DBString][modelName])
           this.plugInFieldRef(field, modelName)
+  }
+
+  ObjectifySortValue(sortValue) {
+    if(Array.isArray(sortValue))
+      return Object.fromEntries(sortValue)
+
+    if(typeof sortValue === 'object')
+      return sortValue
+
+    // else its a string (https://mongoosejs.com/docs/api/query.html#Query.prototype.sort())
+    const sortObj = {}
+    const entries = sortValue.split(' ')
+    for(const entry of entries) {
+      const isDesc = entry[0] === '-'
+
+      if(isDesc)
+        sortObj[entry.slice(1)] = -1
+      else
+        sortObj[entry] = 1
+    }
+
+    return sortObj
   }
 
   _GetFilesRecursievely(rootPath) {
@@ -1183,6 +1206,27 @@ class Robogo {
     return checkedFilter
   }
 
+  async processSort(req) {
+    const sortValue = JSON.parse(req.query.sort || '{}')
+    const sortObject = this.ObjectifySortValue(sortValue)
+
+    const sort = {...this.Models[req.params.model].defaultSort, ...sortObject}
+
+    const promises = []
+    for(let path in sort) {
+      const promise = this.IsFieldDeclined({req, field: this.PathSchemas[req.params.model][path], mode: 'read'})
+        .then(isDeclined => {
+          if(isDeclined)
+            delete sort[path]
+        })
+
+      promises.push(promise)
+    }
+    await Promise.all(promises)
+
+    return sort
+  }
+
   /**
    * Generates all the routes of robogo and returns the express router.
    */
@@ -1229,10 +1273,11 @@ class Robogo {
     Router.get( '/read/:model', (req, res) => {
       async function mainPart(req, res) {
         const filter = await this.processFilter(req)
+        const sort = await this.processSort(req)
 
         return this.MongooseConnection.model(req.params.model)
           .find( filter, req.query.projection )
-          .sort( JSON.parse(req.query.sort || '{}') )
+          .sort( sort )
           .skip( Number(req.query.skip) || 0 )
           .limit( Number(req.query.limit) || null )
           .lean({ autopopulate: true, virtuals: true, getters: true })
