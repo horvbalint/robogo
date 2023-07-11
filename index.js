@@ -518,7 +518,7 @@ class Robogo {
       field.readGuards = [...(field.readGuards || []), ...(Emb.options.readGuards || [])] // collecting all access groups without duplication
       field.writeGuards = [...(field.writeGuards || []), ...(Emb.options.writeGuards || [])] // collecting all access groups without duplication
 
-      if(!Emb.instance) field.subfields = []
+      field.subfields = []
       if(Emb.options.marked) field.marked = true
       if(Emb.options.hidden) field.hidden = true
       if(Emb.options.ref) field.ref = Emb.options.ref
