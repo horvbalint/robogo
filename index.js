@@ -91,6 +91,9 @@ class Robogo {
 
         const ServiceName = ServiceFile.replace('.js', '')
         this.Services[ServiceName] = require(`${ServiceDir}/${ServiceFile}`)
+
+        if(this.Services[ServiceName].default)
+          this.Services[ServiceName] = this.Services[ServiceName].default
       }
     }
   }
@@ -106,6 +109,9 @@ class Robogo {
       if(!schemaPath.endsWith('.js')) continue
 
       let model = require(schemaPath)
+      if(model.default)
+        model = mode.default
+
       let modelName = model.modelName || model.default.modelName
 
       this.Models[modelName] = {
