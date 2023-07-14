@@ -110,7 +110,7 @@ class Robogo {
 
       let model = require(schemaPath)
       if(model.default)
-        model = mode.default
+        model = model.default
 
       let modelName = model.modelName || model.default.modelName
 
