@@ -28,6 +28,7 @@ class Robogo {
     ShowErrors = true,
     ShowWarnings = true,
     ShowLogs = true,
+    ScriptExtension = '.js'
   }) {
     this.MongooseConnection     = MongooseConnection
     this.BaseDBString           = String(MongooseConnection.connections[0]._connectionString)
@@ -55,6 +56,7 @@ class Robogo {
     this.GuardTypes             = {read: 'readGuards', write: 'writeGuards'}
     this.Softwares              = Softwares
     this.AdminGroups            = AdminGroups
+    this.ScriptExtension        = ScriptExtension
 
     if(Array.isArray(AccessGroups)) {
       this.AccessGroups = {}
@@ -84,12 +86,12 @@ class Robogo {
     if(FileDir)
       this.Upload = multer({dest: FileDir}) // multer will handle the saving of files, when one is uploaded
 
-    // Imports every .js file from "ServiceDir" into the "Services" object
+    // Imports every file that matches the ScriptExtension parameter from "ServiceDir" into the "Services" object
     if(ServiceDir) {
       for(const ServiceFile of fs.readdirSync(ServiceDir)) {
-        if(!ServiceFile.endsWith('.js')) continue
+        if(!ServiceFile.endsWith(this.ScriptExtension)) continue
 
-        const ServiceName = ServiceFile.replace('.js', '')
+        const ServiceName = ServiceFile.replace(this.ScriptExtension, '')
         this.Services[ServiceName] = require(`${ServiceDir}/${ServiceFile}`)
 
         if(this.Services[ServiceName].default)
@@ -106,7 +108,7 @@ class Robogo {
    */
   GenerateSchemas() {
     for(let schemaPath of this._GetFilesRecursievely(this.SchemaDir).flat(Infinity)) {
-      if(!schemaPath.endsWith('.js')) continue
+      if(!schemaPath.endsWith(this.ScriptExtension)) continue
 
       let model = require(schemaPath)
       if(model.default)
