@@ -1142,6 +1142,11 @@ class Robogo {
     const promises = []
 
     for(const outerKey in filter) {
+      if(outerKey === '_id') {
+        result._id = filter._id
+        continue
+      }
+
       if(outerKey == '$and' || outerKey == '$or') {
         const conditionPromises = filter[outerKey].map(condition => this.visitFilter({filter: condition, groupVisitor, conditionVisitor}))
         const conditions = await Promise.all(conditionPromises)
