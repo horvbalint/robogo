@@ -1287,7 +1287,6 @@ class Robogo {
       async function mainPart(req, res) {
         const filter = await this.processFilter(req)
         const sort = await this.processSort(req)
-        console.log(sort)
 
         return this.MongooseConnection.model(req.params.model)
           .find( filter, req.query.projection )
