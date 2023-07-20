@@ -512,8 +512,24 @@ class Robogo {
     if(fieldDescriptor.options.enum) field.enum = fieldDescriptor.options.enum
     if(fieldDescriptor.options.autopopulate) field.autopopulate = fieldDescriptor.options.autopopulate
     if(fieldDescriptor.options.hasOwnProperty('default')) field.default = fieldDescriptor.options.default
-    if(fieldDescriptor.options.readGroups) field.readGroups = fieldDescriptor.options.readGroups
-    if(fieldDescriptor.options.writeGroups) field.writeGroups = fieldDescriptor.options.writeGroups
+
+    // TODO: it is not ideal, that we copy every group from the model into every field, but it is needed for now when access checking is done on a subschema
+    // In the following case if a /read was made for Temp1 then the access check would miss that name can not be read because its model has access groups.
+    // const Temp1 = new mongoose.Schema({
+    //   refField: {type: ObejctId, ref: 'Temp2'}
+    // })
+
+    // const Temp2 = new mongoose.Schema({
+    //   name: String,
+    // }, {
+    //   readGroups: ['admin']
+    // })
+
+
+    if(this.Models[modelName]) { // it might be RoboFile, in which case we want to skip this
+      field.readGroups = [...(this.Models[modelName].readGroups || []), ...(fieldDescriptor.options.readGroups || [])]
+      field.writeGroups = [...(this.Models[modelName].writeGroups || []), ...(fieldDescriptor.options.writeGroups || [])]
+    }
 
     // if the field is an array we extract the informations of the type it holds
     if(field.isArray) {
