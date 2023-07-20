@@ -314,8 +314,8 @@ class Robogo {
     for(let modelName in this.DecycledSchemas) {
       let accessesOfModel = this.CollectHighestAccessesOfModel(modelName, {
         subfields: this.DecycledSchemas[modelName],
-        readGroups: [],
-        writeGroups: [],
+        readGroups: this.Models[modelName].readGroups,
+        writeGroups: this.Models[modelName].writeGroups,
         ref: modelName,
       })
 
