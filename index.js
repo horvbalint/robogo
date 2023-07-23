@@ -21,6 +21,7 @@ class Robogo {
     MaxImageSize = 800,
     CreateThumbnail = false,
     MaxThumbnailSize = 200,
+    FileMiddleware = null,
     CheckAccess = true,
     Softwares = [],
     AccessGroups = {},
@@ -49,6 +50,7 @@ class Robogo {
     this.MaxImageSize           = MaxImageSize
     this.CreateThumbnail        = CreateThumbnail
     this.MaxThumbnailSize       = MaxThumbnailSize
+    this.FileMiddleware         = FileMiddleware
     this.CheckAccess            = CheckAccess
     this.Logger                 = new Logger({ShowErrors, ShowWarnings, ShowLogs})
     this.Upload                 = null
@@ -1428,7 +1430,18 @@ class Robogo {
 
     // FILE routes
     if(this.FileDir) {
-      Router.use( `${this.ServeStaticPath}`, express.static(path.resolve(__dirname, this.FileDir), {maxAge: this.MaxFileCacheAge}) )
+      Router.use(
+        `${this.ServeStaticPath}`,
+        (req, res, next) => {
+          if(!this.FileMiddleware)
+            next()
+
+          Promisify(this.FileMiddleware(req))
+            .then(() => next())
+            .catch(reason => res.status(403).send(reason))
+        },
+        express.static(path.resolve(__dirname, this.FileDir), {maxAge: this.MaxFileCacheAge})
+      )
       Router.use( `${this.ServeStaticPath}`, (req, res) => res.status(404).send('NOT FOUND') ) // If a file is not found in FileDir, send back 404 NOT FOUND
 
       Router.post( '/fileupload', this.Upload.single('file'), (req, res) => {
