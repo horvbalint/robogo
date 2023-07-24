@@ -1431,7 +1431,7 @@ class Robogo {
         `${this.ServeStaticPath}`,
         (req, res, next) => {
           if(!this.FileReadMiddleware)
-            next()
+            return next()
 
           Promisify(this.FileReadMiddleware(req))
             .then(() => next())
@@ -1445,7 +1445,7 @@ class Robogo {
         '/fileupload',
         (req, res, next) => {
           if(!this.FileUploadMiddleware)
-            next()
+            return next()
 
           Promisify(this.FileUploadMiddleware(req))
             .then(() => next())
@@ -1482,7 +1482,7 @@ class Robogo {
         '/fileclone/:id',
         (req, res, next) => {
           if(!this.FileUploadMiddleware)
-            next()
+            return next()
 
           Promisify(this.FileUploadMiddleware(req))
             .then(() => next())
@@ -1520,7 +1520,7 @@ class Robogo {
         '/filedelete/:id',
         (req, res, next) => {
           if(!this.FileDeleteMiddleware)
-            next()
+            return next()
 
           Promisify(this.FileDeleteMiddleware(req))
             .then(() => next())
