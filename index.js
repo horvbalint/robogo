@@ -21,7 +21,9 @@ class Robogo {
     MaxImageSize = 800,
     CreateThumbnail = false,
     MaxThumbnailSize = 200,
-    FileMiddleware = null,
+    FileReadMiddleware = null,
+    FileUploadMiddleware = null,
+    FileDeleteMiddleware = null,
     CheckAccess = true,
     Softwares = [],
     AccessGroups = {},
@@ -50,7 +52,9 @@ class Robogo {
     this.MaxImageSize           = MaxImageSize
     this.CreateThumbnail        = CreateThumbnail
     this.MaxThumbnailSize       = MaxThumbnailSize
-    this.FileMiddleware         = FileMiddleware
+    this.FileReadMiddleware     = FileReadMiddleware,
+    this.FileUploadMiddleware   = FileUploadMiddleware,
+    this.FileDeleteMiddleware   = FileDeleteMiddleware,
     this.CheckAccess            = CheckAccess
     this.Logger                 = new Logger({ShowErrors, ShowWarnings, ShowLogs})
     this.Upload                 = null
@@ -1433,10 +1437,10 @@ class Robogo {
       Router.use(
         `${this.ServeStaticPath}`,
         (req, res, next) => {
-          if(!this.FileMiddleware)
+          if(!this.FileReadMiddleware)
             next()
 
-          Promisify(this.FileMiddleware(req))
+          Promisify(this.FileReadMiddleware(req))
             .then(() => next())
             .catch(reason => res.status(403).send(reason))
         },
@@ -1444,80 +1448,114 @@ class Robogo {
       )
       Router.use( `${this.ServeStaticPath}`, (req, res) => res.status(404).send('NOT FOUND') ) // If a file is not found in FileDir, send back 404 NOT FOUND
 
-      Router.post( '/fileupload', this.Upload.single('file'), (req, res) => {
-        if(req.file.mimetype.startsWith('image')) return this.handleImageUpload(req, res)
+      Router.post(
+        '/fileupload',
+        (req, res, next) => {
+          if(!this.FileUploadMiddleware)
+            next()
 
-        let multerPath    = req.file.path
-        let type          = req.file.mimetype
-        let extension     = req.file.originalname.split('.').pop()
-        let filePath      = `${req.file.filename}.${extension}` // the file will be saved with the extension attached
+          Promisify(this.FileUploadMiddleware(req))
+            .then(() => next())
+            .catch(reason => res.status(403).send(reason))
+        },
+        this.Upload.single('file'),
+        (req, res) => {
+          if(req.file.mimetype.startsWith('image')) return this.handleImageUpload(req, res)
 
-        fs.renameSync(multerPath, `${multerPath}.${extension}`)
+          let multerPath    = req.file.path
+          let type          = req.file.mimetype
+          let extension     = req.file.originalname.split('.').pop()
+          let filePath      = `${req.file.filename}.${extension}` // the file will be saved with the extension attached
 
-        let fileData = {
-          name: req.file.originalname,
-          path: filePath,
-          size: req.file.size,
-          extension: extension,
-          type
+          fs.renameSync(multerPath, `${multerPath}.${extension}`)
+
+          let fileData = {
+            name: req.file.originalname,
+            path: filePath,
+            size: req.file.size,
+            extension: extension,
+            type
+          }
+
+          // we create the RoboFile document with the properties of the file
+          RoboFileModel.create(fileData, (err, file) => {
+            if(err) res.status(500).send(err)
+            else res.send(file)
+          })
         }
+      )
 
-        // we create the RoboFile document with the properties of the file
-        RoboFileModel.create(fileData, (err, file) => {
-          if(err) res.status(500).send(err)
-          else res.send(file)
-        })
-      })
+      Router.post(
+        '/fileclone/:id',
+        (req, res, next) => {
+          if(!this.FileUploadMiddleware)
+            next()
 
-      Router.post( '/fileclone/:id', (req, res) => {
-        RoboFileModel.findOne({_id: req.params.id}).lean()
-          .then( roboFile => {
-            let realPath = path.resolve(this.FileDir, roboFile.path)
-            if(!realPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH')
+          Promisify(this.FileUploadMiddleware(req))
+            .then(() => next())
+            .catch(reason => res.status(403).send(reason))
+        },
+        (req, res) => {  
+          RoboFileModel.findOne({_id: req.params.id}).lean()
+            .then( roboFile => {
+              let realPath = path.resolve(this.FileDir, roboFile.path)
+              if(!realPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH')
 
-            let copyRealPath = realPath.replace('.', '_copy.')
-            if(fs.existsSync(realPath)) fs.copyFileSync(realPath, copyRealPath)
-            
-            if(roboFile.thumbnailPath) {
-              let thumbnailPath = path.resolve(this.FileDir, roboFile.thumbnailPath)
-              if(!thumbnailPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH')
+              let copyRealPath = realPath.replace('.', '_copy.')
+              if(fs.existsSync(realPath)) fs.copyFileSync(realPath, copyRealPath)
+              
+              if(roboFile.thumbnailPath) {
+                let thumbnailPath = path.resolve(this.FileDir, roboFile.thumbnailPath)
+                if(!thumbnailPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH')
 
-              let copyThumbnailPath = thumbnailPath.replace('.', '_copy.')
-              if(fs.existsSync(thumbnailPath)) fs.copyFileSync(thumbnailPath, copyThumbnailPath)
-            }
- 
-            delete roboFile._id
-            roboFile.path = roboFile.path.replace('.', '_copy.')
-            roboFile.thumbnailPath = roboFile.thumbnailPath.replace('.', '_copy.')
- 
-            return RoboFileModel.create(roboFile)
-          })
-          .then( file => res.send(file) )
-          .catch( err => res.status(500).send(err) )
-      })
+                let copyThumbnailPath = thumbnailPath.replace('.', '_copy.')
+                if(fs.existsSync(thumbnailPath)) fs.copyFileSync(thumbnailPath, copyThumbnailPath)
+              }
+  
+              delete roboFile._id
+              roboFile.path = roboFile.path.replace('.', '_copy.')
+              roboFile.thumbnailPath = roboFile.thumbnailPath.replace('.', '_copy.')
+  
+              return RoboFileModel.create(roboFile)
+            })
+            .then( file => res.send(file) )
+            .catch( err => res.status(500).send(err) )
+        }
+      )
 
-      Router.delete( '/filedelete/:id', (req, res) => {
-        RoboFileModel.findOne({_id: req.params.id})
-          .then( file => {
-            if(!file) return Promise.reject('Unkown file')
+      Router.delete(
+        '/filedelete/:id',
+        (req, res, next) => {
+          if(!this.FileDeleteMiddleware)
+            next()
 
-            // we remove both the file and thumbnail if they exists
-            let realPath = path.resolve(this.FileDir, file.path)
-            if(!realPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
-            if(fs.existsSync(realPath)) fs.unlinkSync(realPath)
+          Promisify(this.FileDeleteMiddleware(req))
+            .then(() => next())
+            .catch(reason => res.status(403).send(reason))
+        },
+        (req, res) => {
+          RoboFileModel.findOne({_id: req.params.id})
+            .then( file => {
+              if(!file) return Promise.reject('Unkown file')
 
-            if(file.thumbnailPath) {
-              let thumbnailPath = path.resolve(this.FileDir, file.thumbnailPath)
-              if(!thumbnailPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
-              if(fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath)
-            }
+              // we remove both the file and thumbnail if they exists
+              let realPath = path.resolve(this.FileDir, file.path)
+              if(!realPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
+              if(fs.existsSync(realPath)) fs.unlinkSync(realPath)
 
-            // we delete the RoboFile document
-            return RoboFileModel.deleteOne({_id: file._id})
-          })
-          .then( () => res.send() )
-          .catch( err => res.status(400).send(err) )
-      })
+              if(file.thumbnailPath) {
+                let thumbnailPath = path.resolve(this.FileDir, file.thumbnailPath)
+                if(!thumbnailPath.startsWith(this.FileDir)) return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
+                if(fs.existsSync(thumbnailPath)) fs.unlinkSync(thumbnailPath)
+              }
+
+              // we delete the RoboFile document
+              return RoboFileModel.deleteOne({_id: file._id})
+            })
+            .then( () => res.send() )
+            .catch( err => res.status(400).send(err) )
+        }
+      )
     }
     // --------------
 
