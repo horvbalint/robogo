@@ -897,7 +897,7 @@ class Robogo {
           if(declined) {
             delete object[field.key]
           }
-          else if(field.subfields) {
+          else if(field.subfields && (mode === 'read' || !field.ref)) {
             let fieldsOrModel = (field.ref && field.ref != 'RoboFile') ? field.ref : field.subfields
 
             if(Array.isArray(object[field.key])) {
