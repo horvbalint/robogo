@@ -89,6 +89,8 @@ class Robogo {
     this.GeneratePathSchemas()
     this.CollectHighestAccessesOfModels()
 
+    // this.MergeAccessGroups([new Set(['A']), new Set(['B'])], [[new Set('C'), new Set('D')], [new Set('B'), new Set('F')], []])
+
     if(FileDir)
       this.Upload = multer({dest: FileDir}) // multer will handle the saving of files, when one is uploaded
 
@@ -318,17 +320,13 @@ class Robogo {
    */
   CollectHighestAccessesOfModels() {
     for(let modelName in this.DecycledSchemas) {
-      let accessesOfModel = this.CollectHighestAccessesOfModel(modelName, {
+      let accessesOfModel = this.CollectHighestAccessesOfField(modelName, {
         subfields: this.DecycledSchemas[modelName],
         readGroups: this.Models[modelName].readGroups,
         writeGroups: this.Models[modelName].writeGroups,
-        ref: modelName,
       })
 
-      this.Models[modelName].highestAccesses = {
-        read: accessesOfModel.read.map(ag => {ag.delete(null); return [...ag]}),
-        write: accessesOfModel.write.map(ag => {ag.delete(null); return [...ag]})
-      }
+      this.Models[modelName].highestAccesses = accessesOfModel
     }
   }
 
@@ -337,63 +335,78 @@ class Robogo {
    * @param {String} modelName - Name of the model
    * @param {Object} field - A robogo field descriptor
    */
-  CollectHighestAccessesOfModel(modelName, field) {
-    if(modelName && this.Models[modelName].highestAccesses) // If this model was already calculated
-      return this.Models[modelName].highestAccesses // then we return that result
+  CollectHighestAccessesOfField(modelName, field, refDepth = 0) {
+    const currReadGroups = (field.readGroups || []).map(a => new Set([a]))
+    const currWriteGroups = (field.writeGroups || []).map(a => new Set([a]))
 
-    if(!field.subfields || field.ref == 'RoboFile') return { // if the field is a 'leaf' then we return our accesses
-      read: field.readGroups ? field.readGroups.map(a => new Set([a])) : [],
-      write: field.writeGroups ? field.writeGroups.map(a => new Set([a])) : [],
+    if(!field.subfields || !field.subfields.length || field.ref == 'RoboFile') { // if the field is a 'leaf' then we return our accesses
+      return {
+        read: currReadGroups,
+        write: currWriteGroups,
+      }
     }
 
-    let resOfSubfields = field.subfields.map( f => this.CollectHighestAccessesOfModel(field.ref, f) ) // we calculate the results of our subfields
-
-    // we collect all the combinations of the needed access groups into an object
-    let fieldReadGroups = field.readGroups ? field.readGroups.map(a => new Set([a])) : []
-    this.mergeChildAccessGroups(fieldReadGroups, resOfSubfields, 'read')
-
-    let fieldWriteGroups = field.writeGroups ? field.writeGroups.map(a => new Set([a])) : []
-    this.mergeChildAccessGroups(fieldWriteGroups, resOfSubfields, 'write')
-
+    const subRefDepth = field.ref ? refDepth + 1 : refDepth
+    const subfieldResults = field.subfields.map(f => this.CollectHighestAccessesOfField(modelName, f, subRefDepth))
+    
     return {
-      read: fieldReadGroups,
-      write: fieldWriteGroups,
+      read: this.MergeAccessGroups(currReadGroups, subfieldResults.map(r => r.read)),
+      write: (refDepth === 0 && subRefDepth === 0) ? this.MergeAccessGroups(currWriteGroups, subfieldResults.map(r => r.write)) : [],
     }
   }
 
-  mergeChildAccessGroups(fieldGroups, resOfSubfields, mode) {
-    if(!fieldGroups.length)
-      fieldGroups.push(new Set([null]))
+  MergeAccessGroups(targetGroups, sourceGroupsGroups) {
+    sourceGroupsGroups = sourceGroupsGroups.filter(g => g.length)
+    
+    if(!sourceGroupsGroups.length)
+      return targetGroups
 
-    for(let [index, nodeAccess] of fieldGroups.entries()) { // a node read access-ei
-      for(let child of resOfSubfields) { // childen's results
-        if(child[mode].some(g => [...g].every(a => nodeAccess.has(a)))) continue
+    if(!targetGroups.length)
+      targetGroups.push(new Set())
 
-        let copysNeeded = child[mode].length-1
-        for(let i = 0; i < copysNeeded; ++i) {
-          fieldGroups.splice(index, 0, new Set(nodeAccess))
-        }
+    let resultGroups = targetGroups
 
-        for(let [ind, accessGroup] of child[mode].entries()) { // access groups of child
-          let target = fieldGroups[index+ind]
-          accessGroup.forEach(target.add, target)
+    for(const sourceGroups of sourceGroupsGroups) {
+      const currentGroups = []
+
+      for(const sourceGroup of sourceGroups) {
+        label: for(const prevGroup of resultGroups) {
+          const newGroup = new Set([...prevGroup, ...sourceGroup])
+          let lastIndexWithThisSize = 0
+          
+          if(currentGroups.length) {
+            while(lastIndexWithThisSize < currentGroups.length && currentGroups[lastIndexWithThisSize].size <= newGroup.size) {
+              if(this.IsSetSubsetOf(currentGroups[lastIndexWithThisSize], newGroup))
+                continue label
+  
+              lastIndexWithThisSize++
+            }
+  
+            for(let i=lastIndexWithThisSize; i<currentGroups.length; ++i) {
+              if(this.IsSetSubsetOf(newGroup, currentGroups[i])) {
+                currentGroups.splice(i, 1)
+                --i;
+              }
+            }
+          }
+
+          currentGroups.splice(lastIndexWithThisSize, 0, newGroup)
         }
       }
+
+      resultGroups = [...currentGroups]
     }
 
-    fieldGroups.sort((a, b) => a.size - b.size)
-    this.removeDuplicateSetsFromArray(fieldGroups)
+    return resultGroups
   }
 
-  removeDuplicateSetsFromArray(array) {
-    for(let i = 0; i < array.length; ++i) {
-      for(let j = i+1; j < array.length; ++j) {
-        if([...array[i]].every(a => array[j].has(a))) {
-          array.splice(j, 1)
-          --j
-        }
-      }
+  IsSetSubsetOf(one, other) {
+    for(const item of one) {
+      if(!other.has(item))
+        return false
     }
+
+    return true
   }
 
   /**
