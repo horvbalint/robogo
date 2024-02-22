@@ -1,12 +1,13 @@
-const mongoose      = require('mongoose')
-const express       = require('express')
-const multer        = require('multer')
-const sharp         = require('sharp')
-const Fuse          = require('fuse.js')
-const path          = require('path')
-const fs            = require('fs')
+const mongoose = require('mongoose')
+const express = require('express')
+const multer = require('multer')
+const sharp = require('sharp')
+const Fuse = require('fuse.js')
+const path = require('path')
+const fs = require('fs')
 const RoboFileModel = require('./schemas/RoboFile')
-const Logger        = require('./utils/logger')
+const Logger = require('./utils/logger')
+const MinimalSetCollection = require('./utils/minimalSetCollection')
 
 const Router = express.Router()
 
@@ -318,82 +319,78 @@ class Robogo {
    */
   CollectHighestAccessesOfModels() {
     for(let modelName in this.DecycledSchemas) {
-      let accessesOfModel = this.CollectHighestAccessesOfModel(modelName, {
+      let accessesOfModel = this.CollectHighestAccessesOfField({
         subfields: this.DecycledSchemas[modelName],
         readGroups: this.Models[modelName].readGroups,
         writeGroups: this.Models[modelName].writeGroups,
-        ref: modelName,
       })
 
       this.Models[modelName].highestAccesses = {
-        read: accessesOfModel.read.map(ag => {ag.delete(null); return [...ag]}),
-        write: accessesOfModel.write.map(ag => {ag.delete(null); return [...ag]})
+        read: accessesOfModel.read.map(group => [...group]),
+        write: accessesOfModel.write.map(group => [...group])
       }
     }
   }
 
   /**
    * Recursively calculates the highest read and write accesses for a model.
-   * @param {String} modelName - Name of the model
    * @param {Object} field - A robogo field descriptor
+   * @param {number} [refDepth=0] - The recursive depth by reference eof the fields model
+   * @returns {{read: string[][], write: string[][]}}
    */
-  CollectHighestAccessesOfModel(modelName, field) {
-    if(modelName && this.Models[modelName].highestAccesses) // If this model was already calculated
-      return this.Models[modelName].highestAccesses // then we return that result
+  CollectHighestAccessesOfField(field, refDepth = 0) {
+    const currReadGroups = (field.readGroups || []).map(a => [a])
+    const currWriteGroups = (field.writeGroups || []).map(a => [a])
 
-    if(!field.subfields || field.ref == 'RoboFile') return { // if the field is a 'leaf' then we return our accesses
-      read: field.readGroups ? field.readGroups.map(a => new Set([a])) : [],
-      write: field.writeGroups ? field.writeGroups.map(a => new Set([a])) : [],
+    if(!field.subfields || !field.subfields.length || field.ref == 'RoboFile') { // if the field is a 'leaf' then we return our accesses
+      return {
+        read: currReadGroups,
+        write: currWriteGroups,
+      }
     }
 
-    let resOfSubfields = field.subfields.map( f => this.CollectHighestAccessesOfModel(field.ref, f) ) // we calculate the results of our subfields
-
-    // we collect all the combinations of the needed access groups into an object
-    let fieldReadGroups = field.readGroups ? field.readGroups.map(a => new Set([a])) : []
-    this.mergeChildAccessGroups(fieldReadGroups, resOfSubfields, 'read')
-
-    let fieldWriteGroups = field.writeGroups ? field.writeGroups.map(a => new Set([a])) : []
-    this.mergeChildAccessGroups(fieldWriteGroups, resOfSubfields, 'write')
+    const subRefDepth = field.ref ? refDepth + 1 : refDepth
+    const subfieldResults = (field.ref && this.Models[field.ref].highestAccesses) ?
+      [this.Models[field.ref].highestAccesses] :
+      field.subfields.map(f => this.CollectHighestAccessesOfField(f, subRefDepth))
 
     return {
-      read: fieldReadGroups,
-      write: fieldWriteGroups,
+      read: this.MergeAccessGroupCombinations(currReadGroups, subfieldResults.map(r => r.read)),
+      write: subRefDepth === 0 ? this.MergeAccessGroupCombinations(currWriteGroups, subfieldResults.map(r => r.write)) : [],
     }
   }
 
-  mergeChildAccessGroups(fieldGroups, resOfSubfields, mode) {
-    if(!fieldGroups.length)
-      fieldGroups.push(new Set([null]))
+  /**
+   * Merges the access group combinations in "sourceCombinationsArray" with "targetCombinations" into new minimal access group combinations  
+   * @param {string[][]} targetCombinations 
+   * @param {string[][][]} sourceCombinationsArray 
+   * @returns {string[][]}
+   */
+  MergeAccessGroupCombinations(targetCombinations, sourceCombinationsArray) {
+    sourceCombinationsArray = sourceCombinationsArray.filter(g => g.length)
+    
+    if(!sourceCombinationsArray.length)
+      return targetCombinations
 
-    for(let [index, nodeAccess] of fieldGroups.entries()) { // a node read access-ei
-      for(let child of resOfSubfields) { // childen's results
-        if(child[mode].some(g => [...g].every(a => nodeAccess.has(a)))) continue
+    if(!targetCombinations.length)
+      targetCombinations.push([])
 
-        let copysNeeded = child[mode].length-1
-        for(let i = 0; i < copysNeeded; ++i) {
-          fieldGroups.splice(index, 0, new Set(nodeAccess))
-        }
+    let resultCombinations = targetCombinations
 
-        for(let [ind, accessGroup] of child[mode].entries()) { // access groups of child
-          let target = fieldGroups[index+ind]
-          accessGroup.forEach(target.add, target)
-        }
-      }
-    }
+    for(const sourceCombinations of sourceCombinationsArray) {
+      const currentCombinations = new MinimalSetCollection()
 
-    fieldGroups.sort((a, b) => a.size - b.size)
-    this.removeDuplicateSetsFromArray(fieldGroups)
-  }
-
-  removeDuplicateSetsFromArray(array) {
-    for(let i = 0; i < array.length; ++i) {
-      for(let j = i+1; j < array.length; ++j) {
-        if([...array[i]].every(a => array[j].has(a))) {
-          array.splice(j, 1)
-          --j
+      for(const sourceCombination of sourceCombinations) {
+        for(const prevCombination of resultCombinations) {
+          const newCombination = new Set([...prevCombination, ...sourceCombination])
+          currentCombinations.insert(newCombination)
         }
       }
+
+      resultCombinations = currentCombinations.getArray().map(combination => [...combination])
     }
+
+    return resultCombinations
   }
 
   /**
