@@ -1,12 +1,13 @@
-const mongoose      = require('mongoose')
-const express       = require('express')
-const multer        = require('multer')
-const sharp         = require('sharp')
-const Fuse          = require('fuse.js')
-const path          = require('path')
-const fs            = require('fs')
+const mongoose = require('mongoose')
+const express = require('express')
+const multer = require('multer')
+const sharp = require('sharp')
+const Fuse = require('fuse.js')
+const path = require('path')
+const fs = require('fs')
 const RoboFileModel = require('./schemas/RoboFile')
-const Logger        = require('./utils/logger')
+const Logger = require('./utils/logger')
+const MinimalSetCollection = require('./utils/minimalSetCollection')
 
 const Router = express.Router()
 
@@ -88,8 +89,6 @@ class Robogo {
     this.GenerateDecycledSchemas()
     this.GeneratePathSchemas()
     this.CollectHighestAccessesOfModels()
-
-    // this.MergeAccessGroups([new Set(['A']), new Set(['B'])], [[new Set('C'), new Set('D')], [new Set('B'), new Set('F')], []])
 
     if(FileDir)
       this.Upload = multer({dest: FileDir}) // multer will handle the saving of files, when one is uploaded
@@ -320,24 +319,28 @@ class Robogo {
    */
   CollectHighestAccessesOfModels() {
     for(let modelName in this.DecycledSchemas) {
-      let accessesOfModel = this.CollectHighestAccessesOfField(modelName, {
+      let accessesOfModel = this.CollectHighestAccessesOfField({
         subfields: this.DecycledSchemas[modelName],
         readGroups: this.Models[modelName].readGroups,
         writeGroups: this.Models[modelName].writeGroups,
       })
 
-      this.Models[modelName].highestAccesses = accessesOfModel
+      this.Models[modelName].highestAccesses = {
+        read: accessesOfModel.read.map(group => [...group]),
+        write: accessesOfModel.write.map(group => [...group])
+      }
     }
   }
 
   /**
    * Recursively calculates the highest read and write accesses for a model.
-   * @param {String} modelName - Name of the model
    * @param {Object} field - A robogo field descriptor
+   * @param {number} [refDepth=0] - The recursive depth by reference eof the fields model
+   * @returns {{read: string[][], write: string[][]}}
    */
-  CollectHighestAccessesOfField(modelName, field, refDepth = 0) {
-    const currReadGroups = (field.readGroups || []).map(a => new Set([a]))
-    const currWriteGroups = (field.writeGroups || []).map(a => new Set([a]))
+  CollectHighestAccessesOfField(field, refDepth = 0) {
+    const currReadGroups = (field.readGroups || []).map(a => [a])
+    const currWriteGroups = (field.writeGroups || []).map(a => [a])
 
     if(!field.subfields || !field.subfields.length || field.ref == 'RoboFile') { // if the field is a 'leaf' then we return our accesses
       return {
@@ -347,66 +350,47 @@ class Robogo {
     }
 
     const subRefDepth = field.ref ? refDepth + 1 : refDepth
-    const subfieldResults = field.subfields.map(f => this.CollectHighestAccessesOfField(modelName, f, subRefDepth))
-    
+    const subfieldResults = (field.ref && this.Models[field.ref].highestAccesses) ?
+      [this.Models[field.ref].highestAccesses] :
+      field.subfields.map(f => this.CollectHighestAccessesOfField(f, subRefDepth))
+
     return {
-      read: this.MergeAccessGroups(currReadGroups, subfieldResults.map(r => r.read)),
-      write: (refDepth === 0 && subRefDepth === 0) ? this.MergeAccessGroups(currWriteGroups, subfieldResults.map(r => r.write)) : [],
+      read: this.MergeAccessGroupCombinations(currReadGroups, subfieldResults.map(r => r.read)),
+      write: subRefDepth === 0 ? this.MergeAccessGroupCombinations(currWriteGroups, subfieldResults.map(r => r.write)) : [],
     }
   }
 
-  MergeAccessGroups(targetGroups, sourceGroupsGroups) {
-    sourceGroupsGroups = sourceGroupsGroups.filter(g => g.length)
+  /**
+   * Merges the access group combinations in "sourceCombinationsArray" with "targetCombinations" into new minimal access group combinations  
+   * @param {string[][]} targetCombinations 
+   * @param {string[][][]} sourceCombinationsArray 
+   * @returns {string[][]}
+   */
+  MergeAccessGroupCombinations(targetCombinations, sourceCombinationsArray) {
+    sourceCombinationsArray = sourceCombinationsArray.filter(g => g.length)
     
-    if(!sourceGroupsGroups.length)
-      return targetGroups
+    if(!sourceCombinationsArray.length)
+      return targetCombinations
 
-    if(!targetGroups.length)
-      targetGroups.push(new Set())
+    if(!targetCombinations.length)
+      targetCombinations.push([])
 
-    let resultGroups = targetGroups
+    let resultCombinations = targetCombinations
 
-    for(const sourceGroups of sourceGroupsGroups) {
-      const currentGroups = []
+    for(const sourceCombinations of sourceCombinationsArray) {
+      const currentCombinations = new MinimalSetCollection()
 
-      for(const sourceGroup of sourceGroups) {
-        label: for(const prevGroup of resultGroups) {
-          const newGroup = new Set([...prevGroup, ...sourceGroup])
-          let lastIndexWithThisSize = 0
-          
-          if(currentGroups.length) {
-            while(lastIndexWithThisSize < currentGroups.length && currentGroups[lastIndexWithThisSize].size <= newGroup.size) {
-              if(this.IsSetSubsetOf(currentGroups[lastIndexWithThisSize], newGroup))
-                continue label
-  
-              lastIndexWithThisSize++
-            }
-  
-            for(let i=lastIndexWithThisSize; i<currentGroups.length; ++i) {
-              if(this.IsSetSubsetOf(newGroup, currentGroups[i])) {
-                currentGroups.splice(i, 1)
-                --i;
-              }
-            }
-          }
-
-          currentGroups.splice(lastIndexWithThisSize, 0, newGroup)
+      for(const sourceCombination of sourceCombinations) {
+        for(const prevCombination of resultCombinations) {
+          const newCombination = new Set([...prevCombination, ...sourceCombination])
+          currentCombinations.insert(newCombination)
         }
       }
 
-      resultGroups = [...currentGroups]
+      resultCombinations = currentCombinations.getArray().map(combination => [...combination])
     }
 
-    return resultGroups
-  }
-
-  IsSetSubsetOf(one, other) {
-    for(const item of one) {
-      if(!other.has(item))
-        return false
-    }
-
-    return true
+    return resultCombinations
   }
 
   /**
