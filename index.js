@@ -1322,10 +1322,8 @@ class Robogo {
 
     Router.get( '/get/:model/:id', (req, res) => {
       async function mainPart(req, res) {
-        const filter = await this.processFilter(req)
-
         return this.MongooseConnection.model(req.params.model)
-          .findOne({_id: req.params.id, ...filter}, req.query.projection)
+          .findOne({_id: req.params.id }, req.query.projection)
           .lean({ autopopulate: true, virtuals: true, getters: true })
       }
 
