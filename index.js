@@ -356,7 +356,9 @@ class Robogo {
 
     return {
       read: this.MergeAccessGroupCombinations(currReadGroups, subfieldResults.map(r => r.read)),
-      write: subRefDepth === 0 ? this.MergeAccessGroupCombinations(currWriteGroups, subfieldResults.map(r => r.write)) : [],
+      write: field.ref ?
+        currWriteGroups :
+        (subRefDepth === 0 ? this.MergeAccessGroupCombinations(currWriteGroups, subfieldResults.map(r => r.write)) : [])
     }
   }
 
