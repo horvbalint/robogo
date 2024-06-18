@@ -338,7 +338,7 @@ class Robogo {
    * @param {number} [refDepth=0] - The recursive depth by reference eof the fields model
    * @returns {{read: string[][], write: string[][]}}
    */
-  CollectHighestAccessesOfField(field, refDepth = 0) {
+  CollectHighestAccessesOfField(field) {
     const currReadGroups = (field.readGroups || []).map(a => [a])
     const currWriteGroups = (field.writeGroups || []).map(a => [a])
 
@@ -349,16 +349,15 @@ class Robogo {
       }
     }
 
-    const subRefDepth = field.ref ? refDepth + 1 : refDepth
     const subfieldResults = (field.ref && this.Models[field.ref].highestAccesses) ?
       [this.Models[field.ref].highestAccesses] :
-      field.subfields.map(f => this.CollectHighestAccessesOfField(f, subRefDepth))
+      field.subfields.map(f => this.CollectHighestAccessesOfField(f))
 
     return {
       read: this.MergeAccessGroupCombinations(currReadGroups, subfieldResults.map(r => r.read)),
       write: field.ref ?
         currWriteGroups :
-        (subRefDepth === 0 ? this.MergeAccessGroupCombinations(currWriteGroups, subfieldResults.map(r => r.write)) : [])
+        this.MergeAccessGroupCombinations(currWriteGroups, subfieldResults.map(r => r.write))
     }
   }
 
