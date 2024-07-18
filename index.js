@@ -1,6 +1,7 @@
+// @ts-check
+
 import path from 'node:path'
 import fs from 'node:fs'
-import mongoose from 'mongoose'
 import express from 'express'
 import multer from 'multer'
 import sharp from 'sharp'
@@ -11,99 +12,130 @@ import MinimalSetCollection from './utils/minimalSetCollection'
 
 const Router = express.Router()
 
+/**
+ * @typedef {import('express').Request} Request
+ */
+
+/**
+ * @template {string} Namespace
+ * @template {string} AccessGroup
+ */
 class Robogo {
+  /**
+   * @typedef {object} ConstructorConfig
+   * @property {import('mongoose').Connection} mongooseConnection The mongoose connection instance
+   * @property {string} schemaDir Path to the directory in which the mongoose models are defined and exported
+   * @property {string | null} [serviceDir=null] Path to the directory in which the robogo services are defined and exported
+   * @property {string | null} [fileDir=null] Path to the directory in which robogo should store the uploaded files
+   * @property {number} [maxFileCacheAge=5000] The time in milliseconds until if the same file is requested another time, it can be served from the cache memory
+   * @property {number} [maxImageSize=800] Uploaded images higher or wider than this number will be resized to this size
+   * @property {boolean} [createThumbnail=false] Indicates whether robogo should create a small sized version of the images that are uploaded or not
+   * @property {number} [maxThumbnailSize=200] If createThumbnail is true, it behaves the same way as maxImageSize but for thumbnail images.
+   * @property {((req: Request) => Promise) | null} [fileReadMiddleware=null] Middleware function to controll file access, if it rejects, the request will be canceled
+   * @property {((req: Request) => Promise) | null} [fileUploadMiddleware=null] Middleware function to controll file uploads, if it rejects, the request will be canceled
+   * @property {((req: Request) => Promise) | null} [fileDeleteMiddleware=null] Middleware function to controll file deletes, if it rejects, the request will be canceled
+   * @property {boolean} [checkAccess=true] Indicates whether access checking should be enabled in Robogo
+   * @property {Namespace[]} [namespaces=[]] List of access group namespaces
+   * @property {AccessGroup[] | Partial<Record<AccessGroup, Namespace[]>>} [accessGroups={}] Either a list of access groups, or if namspaces are used, then an object with acces groups as keys and a list of namespaces as values.
+   * @property {null | AccessGroup[] | Partial<Record<Namespace, AccessGroup[]>>} [adminGroups={}] Either a list of access groups to be used as admin groups, or if namspaces are used, then an object with namespaces as keys and a list of access groups as values.
+   * @property {boolean} [showErrors=true] Whether to log error messages
+   * @property {boolean} [showWarnings=true] Whether to log warning messages
+   * @property {boolean} [showLogs=true] Whether to log messages
+   * @property {'.js' | '.ts'} [scriptExtension='.js'] The extension of your schema and service files
+   */
+
+  /** @param {ConstructorConfig} config */
   constructor({
-    MongooseConnection = mongoose,
-    SchemaDir,
-    ServiceDir = null,
-    FileDir = null,
-    ServeStaticPath = '/static',
-    MaxFileCacheAge = 5000,
-    MaxImageSize = 800,
-    CreateThumbnail = false,
-    MaxThumbnailSize = 200,
-    FileReadMiddleware = null,
-    FileUploadMiddleware = null,
-    FileDeleteMiddleware = null,
-    CheckAccess = true,
-    Softwares = [],
-    AccessGroups = {},
-    AdminGroups = null,
-    ShowErrors = true,
-    ShowWarnings = true,
-    ShowLogs = true,
-    ScriptExtension = '.js',
+    mongooseConnection,
+    schemaDir,
+    serviceDir = null,
+    fileDir = null,
+    maxFileCacheAge = 5000,
+    maxImageSize = 800,
+    createThumbnail = false,
+    maxThumbnailSize = 200,
+    fileReadMiddleware = null,
+    fileUploadMiddleware = null,
+    fileDeleteMiddleware = null,
+    checkAccess = true,
+    namespaces = [],
+    accessGroups = {},
+    adminGroups = null,
+    showErrors = true,
+    showWarnings = true,
+    showLogs = true,
+    scriptExtension = '.js',
   }) {
-    this.MongooseConnection = MongooseConnection
-    this.BaseDBString = String(MongooseConnection.connections[0]._connectionString)
-    this.Models = {}
-    this.Schemas = { [this.BaseDBString]: {} }
-    this.PathSchemas = {}
-    this.DecycledSchemas = {}
-    this.RoboFileShema = []
-    this.Services = {}
-    this.Middlewares = {}
-    this.Operations = ['C', 'R', 'U', 'D', 'S']
-    this.Timings = ['after', 'before']
-    this.SchemaDir = SchemaDir
-    this.ServiceDir = ServiceDir
-    this.FileDir = FileDir
-    this.ServeStaticPath = ServeStaticPath
-    this.MaxFileCacheAge = MaxFileCacheAge
-    this.MaxImageSize = MaxImageSize
-    this.CreateThumbnail = CreateThumbnail
-    this.MaxThumbnailSize = MaxThumbnailSize
-    this.FileReadMiddleware = FileReadMiddleware
-    this.FileUploadMiddleware = FileUploadMiddleware
-    this.FileDeleteMiddleware = FileDeleteMiddleware
-    this.CheckAccess = CheckAccess
-    this.Logger = new Logger({ ShowErrors, ShowWarnings, ShowLogs })
-    this.Upload = null
-    this.GroupTypes = { read: 'readGroups', write: 'writeGroups' }
-    this.GuardTypes = { read: 'readGuards', write: 'writeGuards' }
-    this.Softwares = Softwares
-    this.AdminGroups = AdminGroups
-    this.ScriptExtension = ScriptExtension
+    this.mongooseConnection = mongooseConnection
+    this.baseDBString = String(mongooseConnection.connections[0]._connectionString)
+    this.models = {}
+    this.schemas = { [this.baseDBString]: {} }
+    this.pathSchemas = {}
+    this.decycledSchemas = {}
+    this.roboFileShema = []
+    this.services = {}
+    this.middlewares = {}
+    this.operations = ['C', 'R', 'U', 'D', 'S']
+    this.timings = ['after', 'before']
+    this.schemaDir = schemaDir
+    this.serviceDir = serviceDir
+    this.fileDir = fileDir
+    this.serveStaticPath = '/static'
+    this.maxFileCacheAge = maxFileCacheAge
+    this.maxImageSize = maxImageSize
+    this.createThumbnail = createThumbnail
+    this.maxThumbnailSize = maxThumbnailSize
+    this.fileReadMiddleware = fileReadMiddleware
+    this.fileUploadMiddleware = fileUploadMiddleware
+    this.fileDeleteMiddleware = fileDeleteMiddleware
+    this.checkAccess = checkAccess
+    this.logger = new Logger({ showErrors, showWarnings, showLogs })
+    this.upload = null
+    this.groupTypes = { read: 'readGroups', write: 'writeGroups' }
+    this.guardTypes = { read: 'readGuards', write: 'writeGuards' }
+    this.namespaces = namespaces
+    this.adminGroups = adminGroups
+    this.scriptExtension = scriptExtension
 
-    if (Array.isArray(AccessGroups)) {
-      this.AccessGroups = {}
+    if (Array.isArray(accessGroups)) {
+      this.accessGroups = {}
 
-      for (const group of AccessGroups) {
-        this.AccessGroups[group] = []
+      for (const group of accessGroups) {
+        this.accessGroups[group] = []
       }
     }
     else {
-      this.AccessGroups = AccessGroups
+      this.accessGroups = accessGroups
     }
 
-    for (const group in this.AccessGroups) {
-      for (const software of this.AccessGroups[group]) {
-        if (!this.Softwares.includes(software)) {
-          this.Logger.LogUnknownSoftwareInAccessGroup(group, software, `processing the access group '${group}'`)
+    for (const group in this.accessGroups) {
+      for (const software of this.accessGroups[group]) {
+        if (!this.namespaces.includes(software)) {
+          this.logger.LogUnknownSoftwareInAccessGroup(group, software, `processing the access group '${group}'`)
         }
       }
     }
 
-    this.RoboFileShema = this.GenerateSchema(RoboFileModel)
+    this.roboFileShema = this.GenerateSchema(RoboFileModel)
     this.GenerateSchemas()
     this.GenerateDecycledSchemas()
     this.GeneratePathSchemas()
     this.CollectHighestAccessesOfModels()
 
     if (FileDir)
-      this.Upload = multer({ dest: FileDir }) // multer will handle the saving of files, when one is uploaded
+      this.upload = multer({ dest: FileDir }) // multer will handle the saving of files, when one is uploaded
 
-    // Imports every file that matches the ScriptExtension parameter from "ServiceDir" into the "Services" object
+    // Imports every file that matches the scriptExtension parameter from "ServiceDir" into the "Services" object
     if (ServiceDir) {
       for (const ServiceFile of fs.readdirSync(ServiceDir)) {
-        if (!ServiceFile.endsWith(this.ScriptExtension))
+        if (!ServiceFile.endsWith(this.scriptExtension))
           continue
 
-        const ServiceName = ServiceFile.replace(this.ScriptExtension, '')
-        this.Services[ServiceName] = require(`${ServiceDir}/${ServiceFile}`)
+        const ServiceName = ServiceFile.replace(this.scriptExtension, '')
+        this.services[ServiceName] = require(`${ServiceDir}/${ServiceFile}`)
 
-        if (this.Services[ServiceName].default)
-          this.Services[ServiceName] = this.Services[ServiceName].default
+        if (this.services[ServiceName].default)
+          this.services[ServiceName] = this.services[ServiceName].default
       }
     }
   }
@@ -114,8 +146,8 @@ class Robogo {
    * Finally it handles the references between the schemas.
    */
   GenerateSchemas() {
-    for (const schemaPath of this._GetFilesRecursievely(this.SchemaDir).flat(Infinity)) {
-      if (!schemaPath.endsWith(this.ScriptExtension))
+    for (const schemaPath of this._GetFilesRecursievely(this.schemaDir).flat(Infinity)) {
+      if (!schemaPath.endsWith(this.scriptExtension))
         continue
 
       let model = require(schemaPath)
@@ -124,7 +156,7 @@ class Robogo {
 
       const modelName = model.modelName || model.default.modelName
 
-      this.Models[modelName] = {
+      this.models[modelName] = {
         model,
         name: model.schema.options.name,
         softwares: model.schema.options.softwares || [],
@@ -136,55 +168,55 @@ class Robogo {
         defaultSort: this.ObjectifySortValue(model.schema.options.defaultSort || {}),
       }
 
-      for (const software of this.Models[modelName].softwares) {
-        if (!this.Softwares.includes(software)) {
-          this.Logger.LogUnknownSoftwareInModel(modelName, software, `processing the model '${modelName}'`)
+      for (const software of this.models[modelName].softwares) {
+        if (!this.namespaces.includes(software)) {
+          this.logger.LogUnknownSoftwareInModel(modelName, software, `processing the model '${modelName}'`)
         }
       }
 
-      for (const groupType of Object.values(this.GroupTypes)) {
+      for (const groupType of Object.values(this.groupTypes)) {
         if (!model.schema.options[groupType])
           continue
 
-        this.Models[modelName][groupType] = model.schema.options[groupType]
+        this.models[modelName][groupType] = model.schema.options[groupType]
 
-        // we add the 'AdminGroups' to the accessGroups if it was not empty
-        if (this.AdminGroups) {
-          if (Array.isArray(this.AdminGroups)) {
-            this.Models[modelName][groupType].unshift(...this.AdminGroups)
+        // we add the 'adminGroups' to the accessGroups if it was not empty
+        if (this.adminGroups) {
+          if (Array.isArray(this.adminGroups)) {
+            this.models[modelName][groupType].unshift(...this.adminGroups)
           }
 
-          else if (typeof this.AdminGroups == 'object') {
-            for (const software of this.Models[modelName].softwares) {
-              if (!this.AdminGroups[software])
+          else if (typeof this.adminGroups == 'object') {
+            for (const software of this.models[modelName].softwares) {
+              if (!this.adminGroups[software])
                 continue
 
-              this.Models[modelName][groupType].unshift(...this.AdminGroups[software])
+              this.models[modelName][groupType].unshift(...this.adminGroups[software])
             }
           }
 
           else {
-            this.Logger.LogIncorrectAdminGroups(this.AdminGroups, `processing the admin groups of the model '${modelName}'`)
+            this.logger.LogIncorrectAdminGroups(this.adminGroups, `processing the admin groups of the model '${modelName}'`)
           }
         }
 
         // We check if an access group is used, that was not provided in the constructor,
         // if so we warn the developer, because it might be a typo.
-        for (const group of this.Models[modelName][groupType]) {
-          if (!this.AccessGroups[group]) {
-            this.Logger.LogUnknownAccessGroupInModel(modelName, group, `processing the model '${modelName}'`)
+        for (const group of this.models[modelName][groupType]) {
+          if (!this.accessGroups[group]) {
+            this.logger.LogUnknownAccessGroupInModel(modelName, group, `processing the model '${modelName}'`)
           }
           else if (
-            this.AccessGroups[group].length && this.Models[modelName].softwares.length
-            && !this.AccessGroups[group].some(software => this.Models[modelName].softwares.includes(software))
+            this.accessGroups[group].length && this.models[modelName].softwares.length
+            && !this.accessGroups[group].some(software => this.models[modelName].softwares.includes(software))
           ) {
-            this.Logger.LogIncorrectAccessGroupSoftwareInModel(modelName, group, this.AccessGroups[group], this.Models[modelName].softwares, `processing the model '${modelName}'`)
+            this.logger.LogIncorrectAccessGroupSoftwareInModel(modelName, group, this.accessGroups[group], this.models[modelName].softwares, `processing the model '${modelName}'`)
           }
         }
       }
 
-      this.Schemas[this.BaseDBString][modelName] = this.GenerateSchema(model)
-      this.Middlewares[modelName] = {
+      this.schemas[this.baseDBString][modelName] = this.GenerateSchema(model)
+      this.middlewares[modelName] = {
         C: { before: () => Promise.resolve(), after: () => Promise.resolve() },
         R: { before: () => Promise.resolve(), after: () => Promise.resolve() },
         U: { before: () => Promise.resolve(), after: () => Promise.resolve() },
@@ -194,9 +226,9 @@ class Robogo {
     }
 
     // Now every schema is ready, we can ref them in each other and check which one of them needs to be access checked when queried
-    for (const DBString in this.Schemas) {
-      for (const modelName in this.Schemas[DBString]) {
-        for (const field of this.Schemas[DBString][modelName])
+    for (const DBString in this.schemas) {
+      for (const modelName in this.schemas[DBString]) {
+        for (const field of this.schemas[DBString][modelName])
           this.plugInFieldRef(field, modelName)
       }
     }
@@ -255,11 +287,11 @@ class Robogo {
    * Theese are the schema types, that can be turned into JSON when needed.
    */
   GenerateDecycledSchemas() {
-    for (const modelName in this.Schemas[this.BaseDBString]) {
-      const DecycledSchema = this.CopySubfields({ subfields: this.Schemas[this.BaseDBString][modelName] }) // We copy the top level of fields
-      this.DecycledSchemas[modelName] = DecycledSchema.subfields // Theese new fields will be the top level of the decycled schema
+    for (const modelName in this.schemas[this.baseDBString]) {
+      const DecycledSchema = this.CopySubfields({ subfields: this.schemas[this.baseDBString][modelName] }) // We copy the top level of fields
+      this.decycledSchemas[modelName] = DecycledSchema.subfields // Theese new fields will be the top level of the decycled schema
 
-      for (const field of this.DecycledSchemas[modelName])
+      for (const field of this.decycledSchemas[modelName])
         this.DecycleField(field)
     }
   }
@@ -302,11 +334,11 @@ class Robogo {
    * Generates a PathSchema descriptor for every schema handled by robogo
    */
   GeneratePathSchemas() {
-    for (const modelName in this.DecycledSchemas) {
-      this.PathSchemas[modelName] = {}
+    for (const modelName in this.decycledSchemas) {
+      this.pathSchemas[modelName] = {}
 
-      for (const field of this.DecycledSchemas[modelName])
-        this.GeneratePathSchema(field, this.PathSchemas[modelName])
+      for (const field of this.decycledSchemas[modelName])
+        this.GeneratePathSchema(field, this.pathSchemas[modelName])
     }
   }
 
@@ -329,14 +361,14 @@ class Robogo {
    * Calculates the highest read and write accesses for every model and saves it to this.Models[DBString][modelName].highestAccesses
    */
   CollectHighestAccessesOfModels() {
-    for (const modelName in this.DecycledSchemas) {
+    for (const modelName in this.decycledSchemas) {
       const accessesOfModel = this.CollectHighestAccessesOfField({
-        subfields: this.DecycledSchemas[modelName],
-        readGroups: this.Models[modelName].readGroups,
-        writeGroups: this.Models[modelName].writeGroups,
+        subfields: this.decycledSchemas[modelName],
+        readGroups: this.models[modelName].readGroups,
+        writeGroups: this.models[modelName].writeGroups,
       })
 
-      this.Models[modelName].highestAccesses = {
+      this.models[modelName].highestAccesses = {
         read: accessesOfModel.read.map(group => [...group]),
         write: accessesOfModel.write.map(group => [...group]),
       }
@@ -360,8 +392,8 @@ class Robogo {
       }
     }
 
-    const subfieldResults = (field.ref && this.Models[field.ref].highestAccesses)
-      ? [this.Models[field.ref].highestAccesses]
+    const subfieldResults = (field.ref && this.models[field.ref].highestAccesses)
+      ? [this.models[field.ref].highestAccesses]
       : field.subfields.map(f => this.CollectHighestAccessesOfField(f))
 
     return {
@@ -412,7 +444,7 @@ class Robogo {
    */
   GetSearchKeys(schema, maxDepth = Infinity) {
     if (typeof schema == 'string')
-      schema = this.DecycledSchemas[schema] // if string was given, we get the schema descriptor
+      schema = this.decycledSchemas[schema] // if string was given, we get the schema descriptor
 
     const keys = []
 
@@ -512,7 +544,7 @@ class Robogo {
     // we basically collect the information we know about the field
     const softDeletedOn = fieldDescriptor.options.softDelete
     if (softDeletedOn !== undefined)
-      this.Models[modelName].defaultFilter[fieldKey] = { $ne: softDeletedOn }
+      this.models[modelName].defaultFilter[fieldKey] = { $ne: softDeletedOn }
 
     const field = {
       key: fieldKey,
@@ -572,41 +604,41 @@ class Robogo {
         field.writeGroups = [...new Set([...(field.writeGroups || []), ...(Emb.options.writeGroups || [])])] // collecting all access groups without duplication
     }
 
-    for (const groupType of Object.values(this.GroupTypes)) {
+    for (const groupType of Object.values(this.groupTypes)) {
       if (!field[groupType])
         continue
 
-      // we add the 'AdminGroups' to the accessGroups if it was not empty
-      if (this.AdminGroups) {
-        if (Array.isArray(this.AdminGroups)) {
-          field[groupType].unshift(...this.AdminGroups)
+      // we add the 'adminGroups' to the accessGroups if it was not empty
+      if (this.adminGroups) {
+        if (Array.isArray(this.adminGroups)) {
+          field[groupType].unshift(...this.adminGroups)
         }
 
-        else if (typeof this.AdminGroups == 'object') {
-          for (const software of this.Models[modelName].softwares) {
-            if (!this.AdminGroups[software])
+        else if (typeof this.adminGroups == 'object') {
+          for (const software of this.models[modelName].softwares) {
+            if (!this.adminGroups[software])
               continue
 
-            field[groupType].unshift(...this.AdminGroups[software])
+            field[groupType].unshift(...this.adminGroups[software])
           }
         }
 
         else {
-          this.Logger.LogIncorrectAdminGroups(this.AdminGroups, `processing the admin groups of the field '${modelName} -> ${field.key}'`)
+          this.logger.LogIncorrectAdminGroups(this.adminGroups, `processing the admin groups of the field '${modelName} -> ${field.key}'`)
         }
       }
 
       // We check if an access group is used, that was not provided in the constructor,
       // if so we warn the developer, because it might be a typo.
       for (const group of field[groupType]) {
-        if (!this.AccessGroups[group]) {
-          this.Logger.LogUnknownAccessGroupInField(modelName, field.key, group, `processing the field '${modelName} -> ${field.key}'`)
+        if (!this.accessGroups[group]) {
+          this.logger.LogUnknownAccessGroupInField(modelName, field.key, group, `processing the field '${modelName} -> ${field.key}'`)
         }
         else if (
-          this.AccessGroups[group].length && this.Models[modelName].softwares.length
-          && !this.AccessGroups[group].some(software => this.Models[modelName].softwares.includes(software))
+          this.accessGroups[group].length && this.models[modelName].softwares.length
+          && !this.accessGroups[group].some(software => this.models[modelName].softwares.includes(software))
         ) {
-          this.Logger.LogIncorrectAccessGroupSoftwareInField(modelName, field.key, group, this.AccessGroups[group], this.Models[modelName].softwares, `processing the field '${modelName} -> ${field.key}'`)
+          this.logger.LogIncorrectAccessGroupSoftwareInField(modelName, field.key, group, this.accessGroups[group], this.models[modelName].softwares, `processing the field '${modelName} -> ${field.key}'`)
         }
       }
     }
@@ -637,7 +669,7 @@ class Robogo {
       }
 
       if (givenType != 'Mixed')
-        this.Logger.LogMixedType(modelName, fieldKey, field)
+        this.logger.LogMixedType(modelName, fieldKey, field)
     }
 
     // if the field has a ref, we check if it is a string or a model
@@ -645,14 +677,14 @@ class Robogo {
       const givenRef = field.ref
       const isModel = typeof givenRef == 'function'
 
-      field.DBString = isModel ? givenRef.db._connectionString : this.BaseDBString // we need to know which connection the ref model is from
+      field.DBString = isModel ? givenRef.db._connectionString : this.baseDBString // we need to know which connection the ref model is from
       field.ref = isModel ? givenRef.modelName : givenRef
 
       // if the model is from another connection, we generate a schema descriptor for it, so we can later use it as ref
-      if (field.DBString != this.BaseDBString) {
-        if (!this.Schemas[field.DBString])
-          this.Schemas[field.DBString] = {}
-        this.Schemas[field.DBString][field.ref] = this.GenerateSchema(givenRef)
+      if (field.DBString != this.baseDBString) {
+        if (!this.schemas[field.DBString])
+          this.schemas[field.DBString] = {}
+        this.schemas[field.DBString][field.ref] = this.GenerateSchema(givenRef)
       }
     }
 
@@ -669,11 +701,11 @@ class Robogo {
 
     if (field.ref) {
       if (field.ref == 'RoboFile')
-        return field.subfields = this.RoboFileShema // RoboFile is not stored in the "Schemas" object as it comes from this library not the user.
-      if (this.Schemas[field.DBString][field.ref])
-        return field.subfields = this.Schemas[field.DBString][field.ref] // If the ref is known as a schema, then the fields new subfields are the fields of that schema
+        return field.subfields = this.roboFileShema // RoboFile is not stored in the "Schemas" object as it comes from this library not the user.
+      if (this.schemas[field.DBString][field.ref])
+        return field.subfields = this.schemas[field.DBString][field.ref] // If the ref is known as a schema, then the fields new subfields are the fields of that schema
 
-      return this.Logger.LogUnknownReference(modelName, field.key, field.ref, `processing the field '${modelName} -> ${field.key}'`)
+      return this.logger.LogUnknownReference(modelName, field.key, field.ref, `processing the field '${modelName} -> ${field.key}'`)
     }
 
     for (const fObj of field.subfields)
@@ -689,7 +721,7 @@ class Robogo {
    */
   GetFields(schema, maxDepth = Infinity, depth = 0) {
     if (typeof schema == 'string')
-      schema = (maxDepth == Infinity ? this.DecycledSchemas : this.Schemas[this.BaseDBString])[schema] // if string was given, we get the schema descriptor
+      schema = (maxDepth == Infinity ? this.decycledSchemas : this.schemas[this.baseDBString])[schema] // if string was given, we get the schema descriptor
 
     const fields = []
 
@@ -726,13 +758,13 @@ class Robogo {
     const filePath = `${req.file.filename}.${extension}` // the image will be saved with the extension attached
 
     let newSize = req.file.size // this will be overwritten with the size after the resizing
-    this.resizeImageTo(multerPath, this.MaxImageSize, `${multerPath}.${extension}`) // resizes and copies the image
+    this.resizeImageTo(multerPath, this.maxImageSize, `${multerPath}.${extension}`) // resizes and copies the image
       .then((size) => {
-        if (size) // if 'this.MaxImageSize' is set to null, then no resizing was done (and 'size' is undefined)
+        if (size) // if 'this.maxImageSize' is set to null, then no resizing was done (and 'size' is undefined)
           newSize = size
 
-        if (this.CreateThumbnail) // if a thumbnail is needed create one
-          return this.resizeImageTo(multerPath, this.MaxThumbnailSize, `${multerPath}_thumbnail.${extension}`)
+        if (this.createThumbnail) // if a thumbnail is needed create one
+          return this.resizeImageTo(multerPath, this.maxThumbnailSize, `${multerPath}_thumbnail.${extension}`)
       })
       .then(() => fs.promises.unlink(multerPath)) // we don't need the original image anymore
       .then(() => RoboFileModel.create({ // we create the RoboFile document
@@ -742,7 +774,7 @@ class Robogo {
         size: newSize,
         extension,
         isImage: true,
-        ...this.CreateThumbnail && { thumbnailPath: `${req.file.filename}_thumbnail.${extension}` }, // A hacky way of only append thumbnailPath to an object, when CreateThumbnail is true
+        ...this.createThumbnail && { thumbnailPath: `${req.file.filename}_thumbnail.${extension}` }, // A hacky way of only append thumbnailPath to an object, when createThumbnail is true
       }))
       .then(file => res.send(file))
       .catch((err) => {
@@ -786,20 +818,20 @@ class Robogo {
   addMiddleware(modelName, operation, timing, middlewareFunction) {
     const errorOccurrence = `adding the custom middleware '${modelName} -> ${operation} -> ${timing}'`
 
-    if (!this.Middlewares[modelName]) {
-      this.Logger.LogMissingModel(modelName, errorOccurrence)
+    if (!this.middlewares[modelName]) {
+      this.logger.LogMissingModel(modelName, errorOccurrence)
       throw new Error(`MISSING MODEL: ${modelName}`)
     }
-    if (!this.Operations.includes(operation)) {
-      this.Logger.LogUnknownOperation(operation, errorOccurrence)
-      throw new Error(`Middleware: Operation should be one of: ${this.Operations}`)
+    if (!this.operations.includes(operation)) {
+      this.logger.LogUnknownOperation(operation, errorOccurrence)
+      throw new Error(`Middleware: Operation should be one of: ${this.operations}`)
     }
-    if (!this.Timings.includes(timing)) {
-      this.Logger.LogUnknownTiming(timing, errorOccurrence)
-      throw new Error(`Middleware: Timing should be one of: ${this.Timings}`)
+    if (!this.timings.includes(timing)) {
+      this.logger.LogUnknownTiming(timing, errorOccurrence)
+      throw new Error(`Middleware: Timing should be one of: ${this.timings}`)
     }
 
-    this.Middlewares[modelName][operation][timing] = middlewareFunction
+    this.middlewares[modelName][operation][timing] = middlewareFunction
   }
 
   /**
@@ -812,8 +844,8 @@ class Robogo {
    */
   CRUDSRoute(req, res, mainPart, responsePart, operation) {
     // if the model is unkown send an error
-    if (!this.Schemas[this.BaseDBString][req.params.model]) {
-      this.Logger.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
+    if (!this.schemas[this.baseDBString][req.params.model]) {
+      this.logger.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
       return res.status(400).send('MISSING MODEL')
     }
 
@@ -825,7 +857,7 @@ class Robogo {
     }
 
     // the code below calls the middleware and normal parts of the route and handles their errors correspondingly
-    const MiddlewareFunctions = this.Middlewares[req.params.model][operation]
+    const MiddlewareFunctions = this.middlewares[req.params.model][operation]
     MiddlewareFunctions.before.call(this, req, res)
       .then(() => {
         this.HasModelAccess(req.params.model, mode, req)
@@ -840,28 +872,28 @@ class Robogo {
                     responsePart.call(this, req, res, result)
                       .catch((err) => { res.status(500).send(err); console.error(err) })
                   })
-                  .catch(message => this.Logger.LogMiddlewareMessage(req.params.model, operation, 'after', message))
+                  .catch(message => this.logger.LogMiddlewareMessage(req.params.model, operation, 'after', message))
               })
               .catch((err) => { res.status(500).send(err); console.error(err) })
           })
       })
-      .catch(message => this.Logger.LogMiddlewareMessage(req.params.model, operation, 'before', message))
+      .catch(message => this.logger.LogMiddlewareMessage(req.params.model, operation, 'before', message))
   }
 
   HasModelAccess(model, mode, req) {
-    const groupType = this.GroupTypes[mode]
+    const groupType = this.groupTypes[mode]
 
     if (mode == 'read' && !req.checkReadAccess)
       return Promise.resolve(true)
     if (mode == 'write' && !req.checkWriteAccess)
       return Promise.resolve(true)
 
-    if (!this.HasGroupAccess(this.Models[model][groupType], req.accessGroups)) {
+    if (!this.HasGroupAccess(this.models[model][groupType], req.accessGroups)) {
       return Promise.resolve(false)
     }
 
-    if (this.Models[model].accessGuards) {
-      const promises = this.Models[model].accessGuards.map(guard => Promisify(guard(req)))
+    if (this.models[model].accessGuards) {
+      const promises = this.models[model].accessGuards.map(guard => Promisify(guard(req)))
       return Promise.all(promises)
         .then(res => !res.some(r => !r))
     }
@@ -887,11 +919,11 @@ class Robogo {
    * @param {object} req
    * @param {string} [DBString]
    */
-  async RemoveDeclinedFields(fields, documents, mode, req, DBString = this.BaseDBString) {
+  async RemoveDeclinedFields(fields, documents, mode, req, DBString = this.baseDBString) {
     let model = null
     if (typeof fields == 'string') { // if model name was given, then we get the models fields
       model = fields
-      fields = this.Schemas[DBString][model]
+      fields = this.schemas[DBString][model]
     }
 
     const guardPreCache = await this.calculateGuardPreCache(req, fields, mode)
@@ -912,14 +944,14 @@ class Robogo {
    * @param {Map?} [params.guardPreCache]
    * @returns {Promise}
    */
-  async RemoveDeclinedFieldsFromObject({ fields, object, mode, req, DBString = this.BaseDBString, guardPreCache = null }) { // todo update everywhere to obejct params
+  async RemoveDeclinedFieldsFromObject({ fields, object, mode, req, DBString = this.baseDBString, guardPreCache = null }) { // todo update everywhere to obejct params
     if (!object)
       return Promise.resolve(object)
 
     let model = null
     if (typeof fields == 'string') { // if model name was given, then we get the models fields
       model = fields
-      fields = this.Schemas[DBString][model]
+      fields = this.schemas[DBString][model]
     }
 
     const fieldsInObj = fields.filter(field => object.hasOwnProperty(field.key))
@@ -968,7 +1000,7 @@ class Robogo {
   }
 
   async calculateGuardPreCache(req, fields, mode) {
-    const guardType = this.GuardTypes[mode]
+    const guardType = this.guardTypes[mode]
 
     const guards = new Set()
     for (const field of fields) {
@@ -1007,13 +1039,13 @@ class Robogo {
       return Promise.resolve(false)
 
     if (checkGroupAccess) {
-      const groupType = this.GroupTypes[mode]
+      const groupType = this.groupTypes[mode]
       if (!this.HasGroupAccess(field[groupType], req.accessGroups)) {
         return Promise.resolve(true)
       }
     }
 
-    return this.IsFieldDecliendByGuards(req, field, this.GuardTypes[mode], guardPreCache)
+    return this.IsFieldDecliendByGuards(req, field, this.guardTypes[mode], guardPreCache)
   }
 
   /**
@@ -1044,7 +1076,7 @@ class Robogo {
     let model = null
     if (typeof fields == 'string') { // if model name was given, then we get the models fields
       model = fields
-      fields = this.DecycledSchemas[model]
+      fields = this.decycledSchemas[model]
     }
 
     if (!fields.length)
@@ -1084,7 +1116,7 @@ class Robogo {
 
   getAccesses(model, req) {
     const accesses = {}
-    const schema = this.Schemas[this.BaseDBString][model]
+    const schema = this.schemas[this.baseDBString][model]
 
     // first we check for read and write accesses on the model itself
     return Promise.all([
@@ -1186,16 +1218,16 @@ class Robogo {
    * @param {string} paramsKey
    */
   ServiceRoute(req, res, paramsKey) {
-    if (!this.Services[req.params.service]) {
-      this.Logger.LogMissingService(req.params.service, `serving the route: '${req.method} ${req.path}'`)
+    if (!this.services[req.params.service]) {
+      this.logger.LogMissingService(req.params.service, `serving the route: '${req.method} ${req.path}'`)
       return res.status(500).send('MISSING SERVICE')
     }
-    if (!this.Services[req.params.service][req.params.fun]) {
-      this.Logger.LogMissingServiceFunction(req.params.service, req.params.fun, `serving the route: '${req.method} ${req.path}'`)
+    if (!this.services[req.params.service][req.params.fun]) {
+      this.logger.LogMissingServiceFunction(req.params.service, req.params.fun, `serving the route: '${req.method} ${req.path}'`)
       return res.status(500).send('MISSING SERVICE FUNCTION')
     }
 
-    this.Services[req.params.service][req.params.fun]
+    this.services[req.params.service][req.params.fun]
       .call(this, req, res, req[paramsKey])
       .then(result => res.send(result))
       .catch(error => res.status(500).send(error))
@@ -1208,7 +1240,7 @@ class Robogo {
    * @param {Array} accessGroups
    */
   hasEveryNeededAccessGroup(modelName, key, accessGroups) {
-    return this.Models[modelName].highestAccesses[key].some(ag => ag.every(a => accessGroups.includes(a)))
+    return this.models[modelName].highestAccesses[key].some(ag => ag.every(a => accessGroups.includes(a)))
   }
 
   async visitFilter({ filter, groupVisitor = () => {}, conditionVisitor = (_path, value) => value }) {
@@ -1243,7 +1275,7 @@ class Robogo {
   }
 
   async extendFilterWithDefaults(modelName, filter) {
-    const defaultFilter = this.Models[modelName].defaultFilter
+    const defaultFilter = this.models[modelName].defaultFilter
 
     if (!Object.keys(defaultFilter).length)
       return { ...filter }
@@ -1268,7 +1300,7 @@ class Robogo {
         return conditions
       },
       conditionVisitor: async (path, value) => {
-        const isDeclined = await this.IsFieldDeclined({ req, field: this.PathSchemas[req.params.model][path], mode: 'read' })
+        const isDeclined = await this.IsFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
         if (isDeclined)
           return Promise.reject()
 
@@ -1289,11 +1321,11 @@ class Robogo {
     const sortValue = JSON.parse(req.query.sort || '{}')
     const sortObject = this.ObjectifySortValue(sortValue)
 
-    const sort = { ...this.Models[req.params.model].defaultSort, ...sortObject }
+    const sort = { ...this.models[req.params.model].defaultSort, ...sortObject }
 
     const promises = []
     for (const path in sort) {
-      const promise = this.IsFieldDeclined({ req, field: this.PathSchemas[req.params.model][path], mode: 'read' })
+      const promise = this.IsFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
         .then((isDeclined) => {
           if (isDeclined)
             delete sort[path]
@@ -1315,10 +1347,10 @@ class Robogo {
         req.accessGroups = []
 
       if (req.checkReadAccess === undefined)
-        req.checkReadAccess = this.CheckAccess
+        req.checkReadAccess = this.checkAccess
 
       if (req.checkWriteAccess === undefined)
-        req.checkWriteAccess = this.CheckAccess
+        req.checkWriteAccess = this.checkAccess
 
       next()
     })
@@ -1480,32 +1512,32 @@ class Robogo {
     // ----------------
 
     // FILE routes
-    if (this.FileDir) {
+    if (this.fileDir) {
       Router.use(
-        `${this.ServeStaticPath}`,
+        `${this.serveStaticPath}`,
         (req, res, next) => {
-          if (!this.FileReadMiddleware)
+          if (!this.fileReadMiddleware)
             return next()
 
-          Promisify(this.FileReadMiddleware(req))
+          Promisify(this.fileReadMiddleware(req))
             .then(() => next())
             .catch(reason => res.status(403).send(reason))
         },
-        express.static(path.resolve(__dirname, this.FileDir), { maxAge: this.MaxFileCacheAge }),
+        express.static(path.resolve(__dirname, this.fileDir), { maxAge: this.maxFileCacheAge }),
       )
-      Router.use(`${this.ServeStaticPath}`, (req, res) => res.status(404).send('NOT FOUND')) // If a file is not found in FileDir, send back 404 NOT FOUND
+      Router.use(`${this.serveStaticPath}`, (req, res) => res.status(404).send('NOT FOUND')) // If a file is not found in FileDir, send back 404 NOT FOUND
 
       Router.post(
         '/fileupload',
         (req, res, next) => {
-          if (!this.FileUploadMiddleware)
+          if (!this.fileUploadMiddleware)
             return next()
 
-          Promisify(this.FileUploadMiddleware(req))
+          Promisify(this.fileUploadMiddleware(req))
             .then(() => next())
             .catch(reason => res.status(403).send(reason))
         },
-        this.Upload.single('file'),
+        this.upload.single('file'),
         (req, res) => {
           if (req.file.mimetype.startsWith('image'))
             return this.handleImageUpload(req, res)
@@ -1537,18 +1569,18 @@ class Robogo {
       Router.post(
         '/fileclone/:id',
         (req, res, next) => {
-          if (!this.FileUploadMiddleware)
+          if (!this.fileUploadMiddleware)
             return next()
 
-          Promisify(this.FileUploadMiddleware(req))
+          Promisify(this.fileUploadMiddleware(req))
             .then(() => next())
             .catch(reason => res.status(403).send(reason))
         },
         (req, res) => {
           RoboFileModel.findOne({ _id: req.params.id }).lean()
             .then((roboFile) => {
-              const realPath = path.resolve(this.FileDir, roboFile.path)
-              if (!realPath.startsWith(this.FileDir))
+              const realPath = path.resolve(this.fileDir, roboFile.path)
+              if (!realPath.startsWith(this.fileDir))
                 return Promise.reject('INVALID PATH')
 
               const copyRealPath = realPath.replace('.', '_copy.')
@@ -1556,8 +1588,8 @@ class Robogo {
                 fs.copyFileSync(realPath, copyRealPath)
 
               if (roboFile.thumbnailPath) {
-                const thumbnailPath = path.resolve(this.FileDir, roboFile.thumbnailPath)
-                if (!thumbnailPath.startsWith(this.FileDir))
+                const thumbnailPath = path.resolve(this.fileDir, roboFile.thumbnailPath)
+                if (!thumbnailPath.startsWith(this.fileDir))
                   return Promise.reject('INVALID PATH')
 
                 const copyThumbnailPath = thumbnailPath.replace('.', '_copy.')
@@ -1579,10 +1611,10 @@ class Robogo {
       Router.delete(
         '/filedelete/:id',
         (req, res, next) => {
-          if (!this.FileDeleteMiddleware)
+          if (!this.fileDeleteMiddleware)
             return next()
 
-          Promisify(this.FileDeleteMiddleware(req))
+          Promisify(this.fileDeleteMiddleware(req))
             .then(() => next())
             .catch(reason => res.status(403).send(reason))
         },
@@ -1593,15 +1625,15 @@ class Robogo {
                 return Promise.reject('Unkown file')
 
               // we remove both the file and thumbnail if they exists
-              const realPath = path.resolve(this.FileDir, file.path)
-              if (!realPath.startsWith(this.FileDir))
+              const realPath = path.resolve(this.fileDir, file.path)
+              if (!realPath.startsWith(this.fileDir))
                 return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
               if (fs.existsSync(realPath))
                 fs.unlinkSync(realPath)
 
               if (file.thumbnailPath) {
-                const thumbnailPath = path.resolve(this.FileDir, file.thumbnailPath)
-                if (!thumbnailPath.startsWith(this.FileDir))
+                const thumbnailPath = path.resolve(this.fileDir, file.thumbnailPath)
+                if (!thumbnailPath.startsWith(this.fileDir))
                   return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
                 if (fs.existsSync(thumbnailPath))
                   fs.unlinkSync(thumbnailPath)
@@ -1635,7 +1667,7 @@ class Robogo {
 
     Router.get('/model', (req, res) => {
       const promises = []
-      for (const modelName in this.Models) {
+      for (const modelName in this.models) {
         const promise = this.HasModelAccess(modelName, 'read', req)
         promises.push(promise)
       }
@@ -1644,11 +1676,11 @@ class Robogo {
         .then((results) => {
           const models = []
 
-          for (const modelName in this.Models) {
+          for (const modelName in this.models) {
             if (req.checkReadAccess && !results.shift())
               continue
 
-            models.push({ ...this.Models[modelName], model: modelName })
+            models.push({ ...this.models[modelName], model: modelName })
           }
 
           res.send(models)
@@ -1721,7 +1753,7 @@ class Robogo {
     })
 
     Router.get('/accessesGroups', (req, res) => {
-      const result = Object.keys(this.AccessGroups)
+      const result = Object.keys(this.accessGroups)
       res.send(result)
     })
 
