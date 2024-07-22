@@ -1,99 +1,89 @@
-// @ts-check
-
 import path from 'node:path'
 import fs from 'node:fs'
 import express from 'express'
 import multer from 'multer'
 import sharp from 'sharp'
 import Fuse from 'fuse.js'
-import RoboFileModel from './schemas/RoboFile'
+import type mongoose from 'mongoose'
+import type { Request, Response } from 'express'
+import { glob } from 'glob'
+import RoboFileModel from './schemas/roboFile'
 import Logger from './utils/logger'
 import MinimalSetCollection from './utils/minimalSetCollection'
+import type { FileMiddlewareFunction, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, NestedArray, OperationType, RoboField, ServiceFunction } from './types'
 
 const Router = express.Router()
 
-// Imports
-/** @typedef {import('mongoose').Connection} MongooseConnection */
-/** @typedef {import('mongoose').Model} MongooseModel */
-/** @typedef {import('express').Request} Request */
-/** @typedef {import('express').Response} Response */
+interface RobogoConfig<Namespace extends string, AccessGroup extends string> {
+  /** The mongoose connection instance */
+  mongooseConnection: mongoose.Connection
+  /** Path to the directory in which the mongoose models are defined and exported */
+  schemaDir: string
+  /** Path to the directory in which the robogo services are defined and exported */
+  serviceDir?: string | null
+  /** Path to the directory in which robogo should store the uploaded files */
+  fileDir?: string | null
+  /** The time in milliseconds until if the same file is requested another time, it can be served from the cache memory */
+  maxFileCacheAge?: number
+  /** Uploaded images higher or wider than this number will be resized to this size */
+  maxImageSize?: number
+  /** Indicates whether robogo should create a small sized version of the images that are uploaded or not */
+  createThumbnail?: boolean
+  /** If createThumbnail is true, it behaves the same way as maxImageSize but for thumbnail images. */
+  maxThumbnailSize?: number
+  /** Middleware function to controll file access, if it rejects, the request will be canceled */
+  fileReadMiddleware?: FileMiddlewareFunction | null
+  /** Middleware function to controll file uploads, if it rejects, the request will be canceled */
+  fileUploadMiddleware?: FileMiddlewareFunction | null
+  /** Middleware function to controll file deletes, if it rejects, the request will be canceled */
+  fileDeleteMiddleware?: FileMiddlewareFunction | null
+  /** Indicates whether access checking should be enabled in Robogo */
+  checkAccess?: boolean
+  /** List of access group namespaces */
+  namespaces?: Namespace[]
+  /** Either a list of access groups, or if namspaces are used, then an object with acces groups as keys and a list of namespaces as values. */
+  accessGroups?: AccessGroup[] | Record<AccessGroup, Namespace[]>
+  /** Either a list of access groups to be used as admin groups, or if namspaces are used, then an object with namespaces as keys and a list of access groups as values. */
+  adminGroups?: null | AccessGroup[] | Partial<Record<Namespace, AccessGroup[]>>
+  /** Whether to log error messages */
+  showErrors?: boolean
+  /** Whether to log warning messages */
+  showWarnings?: boolean
+  /** Whether to log info messages */
+  showLogs?: boolean
+}
 
-// Types
-/**
- * @template {unknown} T
- * @typedef {T | Promise<T>} MaybePromise
- */
-/** @typedef {(req: Request) => Promise} FileMiddlewareFunction */
-/** @typedef {'read' | 'write'} AccessType */
-/** @typedef {(req: Request) => MaybePromise<boolean>} GuardFunction */
-/** @typedef {(req: Request, res: Response, data?: unknown) => unknown} ServiceFunction */
-/** @typedef {'before' | 'after'} MiddlewareTiming */
-/** @typedef {'C' | 'R' | 'U' | 'D' | 'S'} OperationType */
-/** @typedef {(req: Request, res: Response) => Promise<void>} MiddlewareBeforeFunction */
-/** @typedef {(req: Request, res: Response, result: unknown) => Promise<void>} MiddlewareAfterFunction */
+// This is a trick, so we don't have to define all properties twice, in the class as well. See: https://stackoverflow.com/questions/43838202/destructured-parameter-properties-in-constructor
+interface Robogo<Namespace extends string, AccessGroup extends string>
+  extends Required<
+    Omit<
+      RobogoConfig<Namespace, AccessGroup>,
+      'accessGroups' | 'showErrors' | 'showWarnings' | 'showLogs'
+    >
+  > {}
 
-/**
- * @template {string} Namespace
- * @template {string} AccessGroup
- */
-class Robogo {
-  /**
-   * @typedef {object} Model
-   * @property {MongooseModel} model The mongoose model instance
-   * @property {string} name Name of the model
-   * @property {Namespace[]} namespaces Connected namespaces
-   * @property {Record<string, unknown>} props Arbitrary data for the model
-   * @property {Record<AccessType, AccessGroup[][]>} highestAccesses A list of access group variations by access type, if a user has every group in one of the variations, then they can read/write every field in the model
-   * @property {GuardFunction[]} readGuards A list of guard functions to be used for 'read' like operations
-   * @property {GuardFunction[]} writeGuards A list of guard functions to be used for 'write' like operations
-   * @property {Record<string, unknown>} defaultFilter A filter object, where if no filter was provided in the request for the keys, then it will be supplied from this
-   * @property {Record<string, unknown>} defaultSort A sort object, where if no sort was provided in the request for the keys, then it will be supplied from this
-   */
+// eslint-disable-next-line ts/no-unsafe-declaration-merging
+class Robogo<Namespace extends string, AccessGroup extends string> {
+  public models: Record<string, Model<Namespace, AccessGroup>> = {}
+  /** A tree like structure of the fields of the models */
+  public schemas: Record<string, RoboField<AccessGroup>[]> = {}
+  /** A flattened structure of the fields of the models, where the paths of the fields is used as key */
+  public pathSchemas: Record<string, Record<string, RoboField<AccessGroup>[]>> = {}
+  /** The same structure as 'this.schemas', but with ref cycles removed  */
+  public decycledSchemas: Record<string, RoboField<AccessGroup>[]> = {}
+  public accessGroups: Record<AccessGroup, Namespace[]>
+  public operations: OperationType[] = ['C', 'R', 'U', 'D', 'S']
+  public timings: MiddlewareTiming[] = ['after', 'before']
+  public groupTypes = { read: 'readGroups', write: 'writeGroups' } as const
+  public guardTypes = { read: 'readGuards', write: 'writeGuards' } as const
 
-  /**
-   * @typedef {object} RoboField
-   * @property {string} key The key of the field
-   * @property {string} name The name of the field
-   * @property {string} type The type of the field
-   * @property {boolean} [isArray] Indiciates whether the field is an array or not
-   * @property {boolean} [required] Indiciates whether the field is required
-   * @property {string} [description] A description provided to the field
-   * @property {Record<string, unknown>} props Arbitrary data for the field
-   * @property {GuardFunction[]} [readGuards] A list of guard functions to be used for 'read' like operations
-   * @property {GuardFunction[]} [writeGuards] A list of guard functions to be used for 'write' like operations
-   * @property {boolean} [marked] Indiciates whether the field is marked TODO
-   * @property {boolean} [hidden] Indiciates whether the field is hidden TODO
-   * @property {string} [ref] Name of the model that the field references
-   * @property {unknown[]} [enum] The mongoose enum field
-   * @property {boolean | {maxDepth: number}} [autopopulate] The mongoose-autopoulate field
-   * @property {unknown} [default] The default value for the field
-   * @property {AccessGroup[]} [readGroups] A list of access groups of which one is needed to read the fields content
-   * @property {AccessGroup[]} [writeGroups] A list of access groups of which one is needed to write the fields content
-   */
+  /** The fields of the RoboFile model */
+  private roboFileShema: RoboField<AccessGroup>[] = []
+  private services: Record<string, Record<string, ServiceFunction>> = {}
+  private middlewares: Record<string, Record<OperationType, { after: MiddlewareAfterFunction[], before: MiddlewareBeforeFunction[] }>> = {}
+  private logger: Logger
+  private upload: multer.Multer | null
 
-  /**
-   * @typedef {object} ConstructorConfig
-   * @property {MongooseConnection} mongooseConnection The mongoose connection instance
-   * @property {string} schemaDir Path to the directory in which the mongoose models are defined and exported
-   * @property {string | null} [serviceDir=null] Path to the directory in which the robogo services are defined and exported
-   * @property {string | null} [fileDir=null] Path to the directory in which robogo should store the uploaded files
-   * @property {number} [maxFileCacheAge=5000] The time in milliseconds until if the same file is requested another time, it can be served from the cache memory
-   * @property {number} [maxImageSize=800] Uploaded images higher or wider than this number will be resized to this size
-   * @property {boolean} [createThumbnail=false] Indicates whether robogo should create a small sized version of the images that are uploaded or not
-   * @property {number} [maxThumbnailSize=200] If createThumbnail is true, it behaves the same way as maxImageSize but for thumbnail images.
-   * @property {FileMiddlewareFunction | null} [fileReadMiddleware=null] Middleware function to controll file access, if it rejects, the request will be canceled
-   * @property {FileMiddlewareFunction | null} [fileUploadMiddleware=null] Middleware function to controll file uploads, if it rejects, the request will be canceled
-   * @property {FileMiddlewareFunction | null} [fileDeleteMiddleware=null] Middleware function to controll file deletes, if it rejects, the request will be canceled
-   * @property {boolean} [checkAccess=true] Indicates whether access checking should be enabled in Robogo
-   * @property {Namespace[]} [namespaces=[]] List of access group namespaces
-   * @property {AccessGroup[] | Partial<Record<AccessGroup, Namespace[]>>} [accessGroups={}] Either a list of access groups, or if namspaces are used, then an object with acces groups as keys and a list of namespaces as values.
-   * @property {null | AccessGroup[] | Partial<Record<Namespace, AccessGroup[]>>} [adminGroups={}] Either a list of access groups to be used as admin groups, or if namspaces are used, then an object with namespaces as keys and a list of access groups as values.
-   * @property {boolean} [showErrors=true] Whether to log error messages
-   * @property {boolean} [showWarnings=true] Whether to log warning messages
-   * @property {boolean} [showLogs=true] Whether to log info messages
-   */
-
-  /** @param {ConstructorConfig} config */
   constructor({
     mongooseConnection,
     schemaDir,
@@ -108,104 +98,62 @@ class Robogo {
     fileDeleteMiddleware = null,
     checkAccess = true,
     namespaces = [],
-    accessGroups = {},
+    accessGroups = [],
     adminGroups = null,
     showErrors = true,
     showWarnings = true,
     showLogs = true,
-  }) {
-    /** @type {MongooseConnection} The mongoose connection instance */
+  }: RobogoConfig<Namespace, AccessGroup>) {
     this.mongooseConnection = mongooseConnection
-    /** @type {Record<string, Model>} */
-    this.models = {}
-    /** @type {Record<string, RoboField[]>} A tree like structure of the fields of the models */
-    this.schemas = {}
-    /** @type {Record<string, Record<string, RoboField[]>>} A flattened structure of the fields of the models, where the paths of the fields is used as key */
-    this.pathSchemas = {}
-    /** @type {Record<string, RoboField[]>} The same structure as 'this.schemas', but with ref cycles removed  */
-    this.decycledSchemas = {}
-    /** @type {RoboField[]} The fields of the RoboFile model  */
-    this.roboFileShema = []
-    /** @type {Record<string, Record<string, ServiceFunction>>} The fields of the RoboFile model  */
-    this.services = {}
-    /** @type {Record<string, Record<OperationType, {after: MiddlewareAfterFunction[], before: MiddlewareBeforeFunction[]}>>} */
-    this.middlewares = {}
-    /** @type {OperationType[]} */
-    this.operations = ['C', 'R', 'U', 'D', 'S']
-    /** @type {MiddlewareTiming[]} */
-    this.timings = ['after', 'before']
-    /** @type {string} */
     this.schemaDir = schemaDir
-    /** @type {string | null} */
     this.serviceDir = serviceDir
-    /** @type {string | null} */
     this.fileDir = fileDir
-    /** @type {number} */
     this.maxFileCacheAge = maxFileCacheAge
-    /** @type {number} */
     this.maxImageSize = maxImageSize
-    /** @type {boolean} */
     this.createThumbnail = createThumbnail
-    /** @type {number} */
     this.maxThumbnailSize = maxThumbnailSize
-    /** @type {FileMiddlewareFunction | null} */
     this.fileReadMiddleware = fileReadMiddleware
-    /** @type {FileMiddlewareFunction | null} */
     this.fileUploadMiddleware = fileUploadMiddleware
-    /** @type {FileMiddlewareFunction | null} */
     this.fileDeleteMiddleware = fileDeleteMiddleware
-    /** @type {boolean} */
     this.checkAccess = checkAccess
-    /** @type {Logger} */
     this.logger = new Logger({ showErrors, showWarnings, showLogs })
-    /** @type {import('multer').Multer | null} */
     this.upload = null
-    this.groupTypes = /** @type {const} */ { read: 'readGroups', write: 'writeGroups' }
-    this.guardTypes = /** @type {const} */ { read: 'readGuards', write: 'writeGuards' }
-    /** @type {Namespace[]} */
     this.namespaces = namespaces
-    /** @type {AccessGroup[] | Partial<Record<Namespace, AccessGroup[]>> | null} */
     this.adminGroups = adminGroups
 
     if (Array.isArray(accessGroups)) {
-      this.accessGroups = {}
-
-      for (const group of accessGroups) {
-        this.accessGroups[group] = []
-      }
+      const entries = accessGroups.map(group => [group, []])
+      this.accessGroups = Object.fromEntries(entries)
     }
     else {
       this.accessGroups = accessGroups
     }
 
     for (const group in this.accessGroups) {
-      for (const software of this.accessGroups[group]) {
-        if (!this.namespaces.includes(software)) {
-          this.logger.LogUnknownSoftwareInAccessGroup(group, software, `processing the access group '${group}'`)
+      for (const namespace of this.accessGroups[group]) {
+        if (!this.namespaces.includes(namespace)) {
+          this.logger.LogUnknownNamespaceInAccessGroup(group, namespace, `processing the access group '${group}'`)
         }
       }
     }
+  }
 
+  async init() {
     this.roboFileShema = this.GenerateSchema(RoboFileModel)
-    this.GenerateSchemas()
+    await this.GenerateSchemas()
     this.GenerateDecycledSchemas()
     this.GeneratePathSchemas()
     this.CollectHighestAccessesOfModels()
 
-    if (FileDir)
-      this.upload = multer({ dest: FileDir }) // multer will handle the saving of files, when one is uploaded
+    if (this.fileDir)
+      this.upload = multer({ dest: this.fileDir }) // multer will handle the saving of files, when one is uploaded
 
-    // Imports every file that matches the scriptExtension parameter from "ServiceDir" into the "Services" object
-    if (ServiceDir) {
-      for (const ServiceFile of fs.readdirSync(ServiceDir)) {
-        if (!ServiceFile.endsWith(this.scriptExtension))
-          continue
-
-        const ServiceName = ServiceFile.replace(this.scriptExtension, '')
-        this.services[ServiceName] = require(`${ServiceDir}/${ServiceFile}`)
-
-        if (this.services[ServiceName].default)
-          this.services[ServiceName] = this.services[ServiceName].default
+    // Imports every file from "serviceDir" into the "services" object
+    if (this.serviceDir) {
+      for (const serviceFile of await glob(this.serviceDir)) {
+        const ServiceName = serviceFile.split('.')[0]
+        const imported = await import(`${this.serviceDir}/${serviceFile}`) // TODO: some progress reporting would ge great
+        this.services[ServiceName] = imported.default || imported
       }
     }
   }
@@ -215,21 +163,15 @@ class Robogo {
    * Also creates default middlewares for them.
    * Finally it handles the references between the schemas.
    */
-  GenerateSchemas() {
-    for (const schemaPath of this._GetFilesRecursievely(this.schemaDir).flat(Infinity)) {
-      if (!schemaPath.endsWith(this.scriptExtension))
-        continue
-
-      let model = require(schemaPath)
-      if (model.default)
-        model = model.default
-
-      const modelName = model.modelName || model.default.modelName
+  async GenerateSchemas() {
+    for (const schemaPath of await glob(this.schemaDir)) {
+      const model: mongoose.Model<unknown> = await import(schemaPath)
+      const modelName = model.modelName
 
       this.models[modelName] = {
         model,
         name: model.schema.options.name,
-        namespaces: model.schema.options.softwares || [],
+        namespaces: model.schema.options.namespaces || [],
         props: model.schema.options.props || {},
         highestAccesses: null,
         readGuards: model.schema.options.readGuards || [],
@@ -238,9 +180,9 @@ class Robogo {
         defaultSort: this.ObjectifySortValue(model.schema.options.defaultSort || {}),
       }
 
-      for (const software of this.models[modelName].softwares) {
-        if (!this.namespaces.includes(software)) {
-          this.logger.LogUnknownSoftwareInModel(modelName, software, `processing the model '${modelName}'`)
+      for (const namespace of this.models[modelName].namespaces) {
+        if (!this.namespaces.includes(namespace)) {
+          this.logger.LogUnknownNamespaceInModel(modelName, namespace, `processing the model '${modelName}'`)
         }
       }
 
@@ -257,11 +199,11 @@ class Robogo {
           }
 
           else if (typeof this.adminGroups == 'object') {
-            for (const software of this.models[modelName].softwares) {
-              if (!this.adminGroups[software])
+            for (const namespace of this.models[modelName].namespaces) {
+              if (!this.adminGroups[namespace])
                 continue
 
-              this.models[modelName][groupType].unshift(...this.adminGroups[software])
+              this.models[modelName][groupType].unshift(...this.adminGroups[namespace])
             }
           }
 
@@ -277,10 +219,10 @@ class Robogo {
             this.logger.LogUnknownAccessGroupInModel(modelName, group, `processing the model '${modelName}'`)
           }
           else if (
-            this.accessGroups[group].length && this.models[modelName].softwares.length
-            && !this.accessGroups[group].some(software => this.models[modelName].softwares.includes(software))
+            this.accessGroups[group].length && this.models[modelName].namespaces.length
+            && !this.accessGroups[group].some(namespace => this.models[modelName].namespaces.includes(namespace))
           ) {
-            this.logger.LogIncorrectAccessGroupSoftwareInModel(modelName, group, this.accessGroups[group], this.models[modelName].softwares, `processing the model '${modelName}'`)
+            this.logger.LogIncorrectAccessGroupNamespaceInModel(modelName, group, this.accessGroups[group], this.models[modelName].namespaces, `processing the model '${modelName}'`)
           }
         }
       }
@@ -324,18 +266,6 @@ class Robogo {
     }
 
     return sortObj
-  }
-
-  _GetFilesRecursievely(rootPath) {
-    const entries = fs.readdirSync(rootPath, { withFileTypes: true })
-
-    return entries.map((entry) => {
-      const entryPath = path.join(rootPath, entry.name)
-
-      if (entry.isDirectory())
-        return this._GetFilesRecursievely(entryPath)
-      else return entryPath
-    })
   }
 
   /**
@@ -685,11 +615,11 @@ class Robogo {
         }
 
         else if (typeof this.adminGroups == 'object') {
-          for (const software of this.models[modelName].softwares) {
-            if (!this.adminGroups[software])
+          for (const namespace of this.models[modelName].namespaces) {
+            if (!this.adminGroups[namespace])
               continue
 
-            field[groupType].unshift(...this.adminGroups[software])
+            field[groupType].unshift(...this.adminGroups[namespace])
           }
         }
 
@@ -705,10 +635,10 @@ class Robogo {
           this.logger.LogUnknownAccessGroupInField(modelName, field.key, group, `processing the field '${modelName} -> ${field.key}'`)
         }
         else if (
-          this.accessGroups[group].length && this.models[modelName].softwares.length
-          && !this.accessGroups[group].some(software => this.models[modelName].softwares.includes(software))
+          this.accessGroups[group].length && this.models[modelName].namespaces.length
+          && !this.accessGroups[group].some(namespace => this.models[modelName].namespaces.includes(namespace))
         ) {
-          this.logger.LogIncorrectAccessGroupSoftwareInField(modelName, field.key, group, this.accessGroups[group], this.models[modelName].softwares, `processing the field '${modelName} -> ${field.key}'`)
+          this.logger.LogIncorrectAccessGroupNamespaceInField(modelName, field.key, group, this.accessGroups[group], this.models[modelName].namespaces, `processing the field '${modelName} -> ${field.key}'`)
         }
       }
     }

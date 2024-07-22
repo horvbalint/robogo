@@ -1,6 +1,5 @@
 {
   "name": "robogo",
-  "type": "module",
   "version": "0.5.11",
   "description": "a backend multitool for projects using MongoDB, Mongoose and Express",
   "author": "horvbalint",
@@ -25,16 +24,24 @@
     "framework",
     "rest"
   ],
-  "main": "index.js",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc --declaration"
+  },
   "dependencies": {
-    "@types/mongoose": "^5.11.97",
     "fuse.js": "^6.4.2",
+    "glob": "^11.0.0",
     "mongoose": "^8.5.1",
     "multer": "^1.4.2",
-    "sharp": "^0.27.1"
+    "sharp": "^0.27.1",
+    "typescript": "^5.5.3"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^2.23.0",
+    "@types/express": "^4.17.21",
+    "@types/mongoose": "^5.11.97",
+    "@types/multer": "^1.4.11",
+    "@types/node": "^20.4.2",
     "@types/sharp": "^0.32.0",
     "eslint": "9.5.0",
     "eslint-plugin-format": "^0.1.2"
