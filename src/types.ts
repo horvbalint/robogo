@@ -11,13 +11,21 @@ export type OperationType = 'C' | 'R' | 'U' | 'D' | 'S'
 export type MiddlewareBeforeFunction = (req: Request, res: Response) => Promise<void>
 export type MiddlewareAfterFunction = (req: Request, res: Response, result: unknown) => Promise<void>
 export interface NestedArray<T> extends Array<NestedArray<T> | T> {}
+export type SortValue = Parameters<mongoose.Query<unknown, unknown>['sort']>[0]
+export type SortObject = {
+  [key: string]: mongoose.SortOrder | {
+      $meta: any;
+  }
+}
+
+
 export interface RoboField<AccessGroup extends string = string> {
   /** The key of the field */
   key: string
-  /** The name of the field */
-  name: string
   /** The type of the field */
   type: string
+  /** The name of the field */
+  name?: string
   /** Indiciates whether the field is an array or not */
   isArray?: boolean
   /** Indiciates whether the field is required */
@@ -46,13 +54,19 @@ export interface RoboField<AccessGroup extends string = string> {
   readGroups?: AccessGroup[]
   /** A list of access groups of which one is needed to write the fields content */
   writeGroups?: AccessGroup[]
+  /** If the field is of type Object, then the descriptors of its fields */
+  subfields?: RoboField<AccessGroup>[]
 }
 
 export interface Model<Namespace extends string, AccessGroup extends string> {
   /** The mongoose model instance */
   model: mongoose.Model<unknown>
   /** Name of the model */
-  name: string
+  name?: string
+  /** Groups of which at least one is needed to read the model */
+  readGroups?: AccessGroup[]
+  /** Groups of which at least one is needed to write the model */
+  writeGroups?: AccessGroup[]
   /** Connected namespaces */
   namespaces: Namespace[]
   /** Arbitrary data for the model */

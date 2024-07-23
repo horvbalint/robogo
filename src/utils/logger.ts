@@ -207,7 +207,7 @@ This is most likely just a typo, if not, please add the group to the array of de
     this.LogMessage('warning', occurrence, title, description)
   }
 
-  LogIncorrectAccessGroupNamespaceInField(modelName: string, fieldKey: string, accessGroup: string, accessGroupNamespaces: string, modelNamespaces: string, occurrence: string) {
+  LogIncorrectAccessGroupNamespaceInField(modelName: string, fieldKey: string, accessGroup: string, accessGroupNamespaces: readonly string[], modelNamespaces: readonly string[], occurrence: string) {
     const title = `INCORRECT ACCESS GROUP: '${accessGroup}'`
     const description = `
 The access group '${accessGroup}' is used in the field '${fieldKey}' of the model '${modelName}', but they are not meant to be used with each other.
@@ -218,7 +218,7 @@ This is likely an issue, if not, please add one of the model's namespaces to the
     this.LogMessage('warning', occurrence, title, description)
   }
 
-  LogIncorrectAccessGroupNamespaceInModel(modelName: string, accessGroup: string, accessGroupNamespaces: string, modelNamespaces: string, occurrence: string) {
+  LogIncorrectAccessGroupNamespaceInModel(modelName: string, accessGroup: string, accessGroupNamespaces: readonly string[], modelNamespaces: readonly string[], occurrence: string) {
     const title = `INCORRECT ACCESS GROUP: '${accessGroup}'`
     const description = `
 The access group '${accessGroup}' is used in the model '${modelName}', but they are not meant to be used with each other.
