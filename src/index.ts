@@ -1022,80 +1022,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   //     .catch(error => res.status(500).send(error))
   // }
 
-  // async visitFilter({ filter, groupVisitor = () => {}, conditionVisitor = (_path, value) => value }) {
-  //   const result = {}
-  //   const promises = []
-
-  //   for (const outerKey in filter) {
-  //     if (outerKey === '_id') {
-  //       result._id = filter._id
-  //       continue
-  //     }
-
-  //     if (outerKey == '$and' || outerKey == '$or') {
-  //       const conditionPromises = filter[outerKey].map(condition => this.visitFilter({ filter: condition, groupVisitor, conditionVisitor }))
-  //       const conditions = await Promise.all(conditionPromises)
-
-  //       const promise = promisify(groupVisitor(conditions))
-  //         .then(value => result[outerKey] = value)
-
-  //       promises.push(promise)
-  //     }
-  //     else {
-  //       const promise = promisify(conditionVisitor(outerKey, filter[outerKey]))
-  //         .then(value => result[outerKey] = value)
-
-  //       promises.push(promise)
-  //     }
-  //   }
-
-  //   await Promise.allSettled(promises)
-  //   return result
-  // }
-
-  // async extendFilterWithDefaults(modelName, filter) {
-  //   const defaultFilter = this.models[modelName].defaultFilter
-
-  //   if (!Object.keys(defaultFilter).length)
-  //     return { ...filter }
-
-  //   const defaultFilterCopy = JSON.parse(JSON.stringify(defaultFilter))
-  //   await this.visitFilter({
-  //     filter,
-  //     conditionVisitor: path => delete defaultFilterCopy[path],
-  //   })
-
-  //   return { ...defaultFilterCopy, ...filter }
-  // }
-
-  // async removeDeclinedFieldsFromFilter(req, filter) {
-  //   return await this.visitFilter({
-  //     filter,
-  //     groupVisitor: (results) => {
-  //       const conditions = results.filter(result => Object.keys(result).length)
-  //       if (!conditions.length)
-  //         return Promise.reject()
-
-  //       return conditions
-  //     },
-  //     conditionVisitor: async (path, value) => {
-  //       const isDeclined = await this.isFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
-  //       if (isDeclined)
-  //         return Promise.reject()
-
-  //       return value
-  //     },
-  //   })
-  // }
-
-  // async processFilter(req) {
-  //   const originalFilter = JSON.parse(req.query.filter || '{}')
-  //   const extendedFilter = await this.extendFilterWithDefaults(req.params.model, originalFilter)
-  //   const checkedFilter = await this.removeDeclinedFieldsFromFilter(req, extendedFilter)
-
-  //   return checkedFilter
-  // }
-
   // async processSort(req) {
   //   const sortValue = JSON.parse(req.query.sort || '{}')
   //   const sortObject = this.ObjectifySortValue(sortValue)
@@ -1186,66 +1112,66 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     return !goodGroups || goodGroups.some(gg => accessGroups.includes(gg))
   }
 
-   /** Removes declined fields from an object. */
-  async removeDeclinedFieldsFromObject<T extends Partial<MongooseDocument>>({object, mode, req, guardPreCache, ...params}: {
-    object: T
+  /** Removes declined fields from an object. */
+  async removeDeclinedFieldsFromObject({object, mode, req, guardPreCache, ...params}: { 
+    object: Partial<MongooseDocument>
     mode: AccessType
     req: Request
-    guardPreCache: GuardPreCache
+    guardPreCache?: GuardPreCache
   } & ({
     fields: RoboField<AccessGroup>[]
   } | {
     modelName: string
-  })
-): Promise<Partial<T>> {
-    if (!object)
-      return object
+  })): Promise<void> {
+    if (!object) // TODO: is this needed?
+      return
 
     const fields = 'fields' in params ? params.fields : this.schemas[params.modelName]
     const fieldsInObj = fields.filter(field => object.hasOwnProperty(field.key))
     if (!fieldsInObj.length)
-      return object
+      return
 
     if ('modelName' in params) {
       const hasModelAccess = await this.hasModelAccess(params.modelName, mode, req)
       if (!hasModelAccess) {
         delete object._id
-
         for (const field of fieldsInObj)
           delete object[field.key]
 
-        return object
+        return
       }
     }
 
     const checkGroupAccess = !('modelName' in params) || !this.hasEveryNeededAccessGroup(params.modelName, mode, req.accessGroups as AccessGroup[])
-    const promises = []
-
     guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fieldsInObj, mode)
-    for (const field of fieldsInObj) {
-      const promise = this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache })
-        .then((declined) => {
-          if (declined) {
-            delete object[field.key]
-          }
-          else if (field.subfields && (mode === 'read' || !field.ref)) {
-            const fieldsOrModel = (field.ref && field.ref != 'RoboFile') ? field.ref : field.subfields
 
-            if (Array.isArray(object[field.key])) {
-              const subPromises = (object[field.key] as Array<object>).map(obj => this.removeDeclinedFieldsFromObject({ fields: fieldsOrModel, object: obj, mode, req, guardPreCache }))
-              return Promise.all(subPromises)
-            }
-            else {
-              return this.removeDeclinedFieldsFromObject({ fields: fieldsOrModel, object: object[field.key], mode, req, guardPreCache })
-            }
-          }
-        })
-
-      promises.push(promise)
-    }
-
+    const promises = fieldsInObj.map(field => this.removeDeclinedFieldsFromObjectHelper({object, req, field, mode, checkGroupAccess, guardPreCache}))
     await Promise.all(promises)
-    return object
+  }
+
+  async removeDeclinedFieldsFromObjectHelper({ object, req, field, mode, checkGroupAccess, guardPreCache }: {
+    object: Partial<MongooseDocument>
+    mode: AccessType
+    req: Request
+    guardPreCache: GuardPreCache
+    checkGroupAccess: boolean
+    field: RoboField<AccessGroup>
+  }) {
+    const declined = await this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache })
+    if (declined) {
+      delete object[field.key]
+    }
+    else if (field.subfields && (mode === 'read' || !field.ref)) { // we only recurse to the subobjects if reading, or when writing but the field is not a reference
+      const fieldsOrModel = field.ref ? {modelName: field.ref} : {fields: field.subfields}
+
+      if (Array.isArray(object[field.key])) {
+        const promises = (object[field.key] as Array<object>).map(obj => this.removeDeclinedFieldsFromObject({ ...fieldsOrModel, object: obj, mode, req, guardPreCache }))
+        await Promise.all(promises)
+      }
+      else {
+        await this.removeDeclinedFieldsFromObject({ ...fieldsOrModel, object: object[field.key] as object, mode, req, guardPreCache })
+      }
+    }
   }
 
   /** Checks if there is minimal required access groups set for the model, of which every group is in the requests access groups */
@@ -1285,7 +1211,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     mode: AccessType
     checkGroupAccess: boolean
     guardPreCache: null | GuardPreCache
-  }) {
+  }): Promise<boolean> {
     const shouldCheckAccess = mode == 'read' ? req.checkReadAccess : req.checkWriteAccess
     if (!shouldCheckAccess)
       return false
@@ -1322,6 +1248,85 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       .catch(() => true)
   }
 
+  async processFilter(req: Request) {
+    const originalFilter = JSON.parse(req.query.filter as string || '{}')
+    const extendedFilter = await this.extendFilterWithDefaults(req.params.model, originalFilter)
+    const checkedFilter = await this.removeDeclinedFieldsFromFilter(req, extendedFilter)
+
+    return checkedFilter
+  }
+
+  /** Extends the given filter object with the given models default filters (if any) */
+  async extendFilterWithDefaults(modelName: string, filter: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const defaultFilter = this.models[modelName].defaultFilter
+
+    if (!Object.keys(defaultFilter).length)
+      return { ...filter }
+
+    const defaultFilterCopy = JSON.parse(JSON.stringify(defaultFilter))
+    await this.visitFilter({
+      filter,
+      conditionVisitor: path => delete defaultFilterCopy[path],
+    })
+
+    return { ...defaultFilterCopy, ...filter }
+  }
+
+  async removeDeclinedFieldsFromFilter(req: Request, filter: Record<string, unknown>) {
+    return await this.visitFilter({
+      filter,
+      groupVisitor: (results) => {
+        const conditions = results.filter(result => Object.keys(result).length)
+        if (!conditions.length)
+          return Promise.reject()
+
+        return conditions
+      },
+      conditionVisitor: async (path, value) => {
+        const isDeclined = await this.isFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
+        if (isDeclined)
+          return Promise.reject()
+
+        return value
+      },
+    })
+  }
+
+  async visitFilter({ filter, groupVisitor = () => {}, conditionVisitor = (_path, value) => value }: {
+    filter: Record<string, unknown>
+    groupVisitor: () => void
+    conditionVisitor: (path: string, value: unknown) => unknown
+  }) {
+    const result = {}
+    const promises = []
+
+    for (const outerKey in filter) {
+      if (outerKey === '_id') {
+        result._id = filter._id
+        continue
+      }
+
+      if (outerKey == '$and' || outerKey == '$or') {
+        const conditionPromises = filter[outerKey].map(condition => this.visitFilter({ filter: condition, groupVisitor, conditionVisitor }))
+        const conditions = await Promise.all(conditionPromises)
+
+        const promise = promisify(groupVisitor(conditions))
+          .then(value => result[outerKey] = value)
+
+        promises.push(promise)
+      }
+      else {
+        const promise = promisify(conditionVisitor(outerKey, filter[outerKey]))
+          .then(value => result[outerKey] = value)
+
+        promises.push(promise)
+      }
+    }
+
+    await Promise.allSettled(promises)
+    return result
+  }
+
   /** Generates all the routes of robogo and returns the express router. */
   generateRoutes() {
     Router.use((req, res, next) => {
@@ -1343,19 +1348,15 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         operation: 'C',
         req,
         res,
-        mainPart: async (req, res) => {
+        mainPart: async req => {
           if (req.checkWriteAccess)
-            await this.removeDeclinedFieldsFromObject({ fields: req.params.model, object: req.body, mode: 'write', req })
+            await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: req.body, mode: 'write', req })
   
-          const Model = this.mongooseConnection.model(req.params.model)
-          const ModelInstance = new Model(req.body)
-          return ModelInstance.save()
+          return this.mongooseConnection.model(req.params.model).create(req.body)
         },
         responsePart: async (req, res, result) => {
-          result = result.toObject() // this is needed, because mongoose returns an immutable object by default
-  
           if (req.checkReadAccess)
-            await this.removeDeclinedFieldsFromObject({ fields: req.params.model, object: result, mode: 'read', req })
+            await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: result.toObject(), mode: 'read', req }) // .toObject() is needed, because create returns an immutable object by default 
   
           res.send(result)
         },
@@ -1366,26 +1367,28 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     // READ routes
     // these routes will use "lean" so that results are not immutable
     Router.get('/read/:model', (req, res) => {
-      async function mainPart(req, res) {
-        const filter = await this.processFilter(req)
-        const sort = await this.processSort(req)
-
-        return this.MongooseConnection.model(req.params.model)
-          .find(filter, req.query.projection)
-          .sort(sort)
-          .skip(Number(req.query.skip) || 0)
-          .limit(Number(req.query.limit) || null)
-          .lean({ autopopulate: true, virtuals: true, getters: true })
-      }
-
-      async function responsePart(req, res, results) {
-        if (req.checkReadAccess)
-          await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
-
-        res.send(results)
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'R')
+      this.CRUDSRoute({
+        operation: 'R',
+        req,
+        res,
+        mainPart: async req => {
+          const filter = await this.processFilter(req)
+          const sort = await this.processSort(req)
+  
+          return this.mongooseConnection.model(req.params.model)
+            .find(filter, req.query.projection)
+            .sort(sort)
+            .skip(Number(req.query.skip) || 0)
+            .limit(Number(req.query.limit) || null)
+            .lean({ autopopulate: true, virtuals: true, getters: true })
+        },
+        responsePart: async (req, res, result) => {
+          if (req.checkReadAccess)
+            await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
+  
+          res.send(results)
+        }
+      })
     })
 
     Router.get('/get/:model/:id', (req, res) => {
