@@ -23,6 +23,14 @@ declare global {
   interface ArrayConstructor {
     isArray(arg: unknown): arg is unknown[] | readonly unknown[];
   }
+
+  namespace Express {
+    interface Request {
+      accessGroups?: string[]
+      checkReadAccess?: boolean
+      checkWriteAccess?: boolean
+    }
+  }
 }
 
 

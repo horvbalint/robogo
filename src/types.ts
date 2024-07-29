@@ -1,10 +1,12 @@
 import type mongoose from 'mongoose'
 import type { Request, Response } from 'express'
+import { ObjectId } from 'mongoose'
 
 export type MaybePromise<T> = T | Promise<T>
 export type FileMiddlewareFunction = (req: Request) => Promise<void>
 export type AccessType = 'read' | 'write'
 export type GuardFunction = (req: Request) => MaybePromise<boolean>
+export type GuardPreCache = Map<GuardFunction, boolean>
 export type ServiceFunction = (req: Request, res: Response, data?: unknown) => unknown
 export type MiddlewareTiming = 'before' | 'after'
 export type OperationType = 'C' | 'R' | 'U' | 'D' | 'S'
@@ -17,9 +19,19 @@ export type SortObject = {
       $meta: any;
   }
 }
+export interface MongooseDocument {
+  _id: ObjectId
+  [key: string]: unknown
+}
 
+export interface WithAccessGroups<AccessGroup extends string> {
+  /** A list of access groups of which one is needed to read the content */
+  readGroups?: AccessGroup[]
+  /** A list of access groups of which one is needed to write the content */
+  writeGroups?: AccessGroup[]
+}
 
-export interface RoboField<AccessGroup extends string = string> {
+export interface RoboField<AccessGroup extends string = string> extends WithAccessGroups<AccessGroup> {
   /** The key of the field */
   key: string
   /** The type of the field */
@@ -35,9 +47,9 @@ export interface RoboField<AccessGroup extends string = string> {
   /** Arbitrary data for the field */
   props: Record<string, unknown>
   /** A list of guard functions to be used for 'read' like operations */
-  readGuards?: GuardFunction[]
+  readGuards: GuardFunction[]
   /** A list of guard functions to be used for 'write' like operations */
-  writeGuards?: GuardFunction[]
+  writeGuards: GuardFunction[]
   /** Indiciates whether the field is marked TODO */
   marked?: boolean
   /** Indiciates whether the field is hidden TODO */
@@ -50,29 +62,21 @@ export interface RoboField<AccessGroup extends string = string> {
   autopopulate?: boolean | { maxDepth: number }
   /** The default value for the field */
   default?: unknown
-  /** A list of access groups of which one is needed to read the fields content */
-  readGroups?: AccessGroup[]
-  /** A list of access groups of which one is needed to write the fields content */
-  writeGroups?: AccessGroup[]
   /** If the field is of type Object, then the descriptors of its fields */
   subfields?: RoboField<AccessGroup>[]
 }
 
-export interface Model<Namespace extends string, AccessGroup extends string> {
+export interface Model<Namespace extends string, AccessGroup extends string> extends WithAccessGroups<AccessGroup> {
   /** The mongoose model instance */
   model: mongoose.Model<unknown>
   /** Name of the model */
   name?: string
-  /** Groups of which at least one is needed to read the model */
-  readGroups?: AccessGroup[]
-  /** Groups of which at least one is needed to write the model */
-  writeGroups?: AccessGroup[]
   /** Connected namespaces */
   namespaces: Namespace[]
   /** Arbitrary data for the model */
   props: Record<string, unknown>
   /** A list of access group variations by access type, if a user has every group in one of the variations, then they can read/write every field in the model */
-  highestAccesses: null | Record<AccessType, AccessGroup[][]>
+  minimalRequriedAccessGroupSets: null | Record<AccessType, AccessGroup[][]>
   /** A list of guard functions to be used for 'read' like operations */
   readGuards: GuardFunction[]
   /** A list of guard functions to be used for 'write' like operations */

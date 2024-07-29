@@ -10,10 +10,16 @@ import { glob } from 'glob'
 import RoboFileModel from './schemas/roboFile'
 import Logger from './utils/logger'
 import MinimalSetCollection from './utils/minimalSetCollection'
-import type { FileMiddlewareFunction, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, NestedArray, OperationType, RoboField, ServiceFunction, SortObject, SortValue } from './types'
-import { model, Mongoose } from 'mongoose'
+import type { AccessType, FileMiddlewareFunction, GuardFunction, GuardPreCache, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, NestedArray, OperationType, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
+import { model, mongo, Mongoose, ObjectId } from 'mongoose'
 
 const Router = express.Router()
+
+class MiddlewareError extends Error {
+  constructor(public type: MiddlewareTiming, err: Error) {
+    super(type, { cause: err })
+  }
+}
 
 interface RobogoConfig<Namespace extends string, AccessGroup extends string> {
   /** The mongoose connection instance */
@@ -69,7 +75,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   /** A tree like structure of the fields of the models */
   public schemas: Record<string, RoboField<AccessGroup>[]> = {}
   /** A flattened structure of the fields of the models, where the paths of the fields is used as key */
-  public pathSchemas: Record<string, Record<string, RoboField<AccessGroup>[]>> = {}
+  public pathSchemas: Record<string, Record<string, RoboField<AccessGroup>>> = {}
   /** The same structure as 'this.schemas', but with ref cycles removed  */
   public decycledSchemas: Record<string, RoboField<AccessGroup>[]> = {}
   public accessGroups: Record<AccessGroup, readonly Namespace[]>
@@ -133,18 +139,20 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     for (const group in this.accessGroups) {
       for (const namespace of this.accessGroups[group]) {
         if (!this.namespaces.includes(namespace)) {
-          this.logger.LogUnknownNamespaceInAccessGroup(group, namespace, `processing the access group '${group}'`)
+          this.logger.logUnknownNamespaceInAccessGroup(group, namespace, `processing the access group '${group}'`)
         }
       }
     }
   }
 
   async init() {
-    // this.roboFileShema = this.GenerateSchema(RoboFileModel)
+    const roboModel = this.generateModel(RoboFileModel as mongoose.Model<unknown>)
+    this.roboFileShema = this.generateSchema(roboModel)
+    
     await this.processSchemas()
-    // this.GenerateDecycledSchemas()
-    // this.GeneratePathSchemas()
-    // this.CollectHighestAccessesOfModels()
+    this.generateDecycledSchemas()
+    this.generatePathSchemas()
+    this.collectMinimalRequiredAccessesGroupSetsOfModels()
 
     if (this.fileDir)
       this.upload = multer({ dest: this.fileDir }) // multer will handle the saving of files, when one is uploaded
@@ -152,11 +160,17 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     // Imports every file from "serviceDir" into the "services" object
     if (this.serviceDir) {
       for (const serviceFile of await glob(this.serviceDir)) {
-        const ServiceName = serviceFile.split('.')[0]
-        const imported = await import(`${this.serviceDir}/${serviceFile}`) // TODO: some progress reporting would ge great
-        this.services[ServiceName] = imported.default || imported
+        const serviceName = serviceFile.split('/').at(-1)!.split('.')[0]
+        const imported = await import(serviceFile) // TODO: some progress reporting would ge great
+        this.services[serviceName] = imported.default || imported
       }
     }
+
+    console.log('\n\n\n\n\n\n\n\n')
+    // console.log(this.models.Test)
+    // console.dir(this.decycledSchemas.Test, {depth: null})
+    // console.log(this.services)
+    console.log('\n\n\n\n\n\n\n\n')
   }
 
   /**
@@ -169,7 +183,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       const {default: mongooseModel}: {default: mongoose.Model<unknown>} = await import(schemaPath)
       
       this.models[mongooseModel.modelName] = this.generateModel(mongooseModel)
-      this.schemas[mongooseModel.modelName] = this.generateSchema(mongooseModel)
+      this.schemas[mongooseModel.modelName] = this.generateSchema(this.models[mongooseModel.modelName])
       this.middlewares[mongooseModel.modelName] = {
         C: { before: async () => {}, after: async () => {} },
         R: { before: async () => {}, after: async () => {} },
@@ -179,11 +193,11 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       }
     }
 
-    // // // Now every schema is ready, we can ref them in each other and check which one of them needs to be access checked when queried
-    // for (const modelName in this.schemas) {
-    //   for (const field of this.schemas[modelName])
-    //     this.plugInFieldRef(field, modelName)
-    // }
+    // // Now every schema is ready, we can ref them in each other and check which one of them needs to be access checked when queried
+    for (const modelName in this.schemas) {
+      for (const field of this.schemas[modelName])
+        this.plugInFieldRef(field, modelName)
+    }
   }
 
   /** Constructs a robogo model instance from a mongoose model instance */
@@ -195,7 +209,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       name: mongooseModel.schema.get('name'),
       namespaces: mongooseModel.schema.get('namespaces') as Namespace[] || [],
       props: mongooseModel.schema.get('props') || {},
-      highestAccesses: null,
+      minimalRequriedAccessGroupSets: null,
       readGuards: mongooseModel.schema.get('readGuards') || [],
       writeGuards: mongooseModel.schema.get('writeGuards') || [],
       defaultFilter: mongooseModel.schema.get('defaultFilter') || {},
@@ -204,7 +218,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
     for (const namespace of roboModel.namespaces) {
       if (!this.namespaces.includes(namespace))
-        this.logger.LogUnknownNamespaceInModel(modelName, namespace, `processing the model '${modelName}'`)
+        this.logger.logUnknownNamespaceInModel(modelName, namespace, `processing the model '${modelName}'`)
     }
 
     this.addAccessGroupsToModel(mongooseModel, roboModel)
@@ -215,40 +229,54 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   /** Handles adding read and write groups to a model, from its mongoose instance and the global admin groups */
   addAccessGroupsToModel(mongooseModel: mongoose.Model<unknown>, roboModel: Model<Namespace, AccessGroup>) {
     for (const groupType of Object.values(this.groupTypes)) {
-      if (!mongooseModel.schema.get(groupType))
+      roboModel[groupType] = mongooseModel.schema.get(groupType) as AccessGroup[] | undefined
+
+      this.addAdminGroups(roboModel, roboModel)
+      this.validateGroups(roboModel, roboModel)
+    }
+  }
+
+  /** Add the admin groups to the target's access groups */
+  addAdminGroups(target: WithAccessGroups<AccessGroup>, model: Model<Namespace, AccessGroup>) {
+    if (!this.adminGroups)
+      return
+
+    for (const groupType of Object.values(this.groupTypes)) {
+      if (!target[groupType])
         continue
 
-      roboModel[groupType] = mongooseModel.schema.get(groupType) as AccessGroup[]
+      if (Array.isArray(this.adminGroups)) {
+        target[groupType].unshift(...this.adminGroups)
+      }
+      else if (typeof this.adminGroups == 'object') {
+        for (const namespace of model.namespaces) {
+          if (!this.adminGroups[namespace])
+            continue
 
-      // We check if an access group is used, that was not provided in the constructor,
-      // if so we warn the developer, because it might be a typo.
-      for (const group of roboModel[groupType]) {
-        if (!this.accessGroups[group]) {
-          this.logger.LogUnknownAccessGroupInModel(mongooseModel.modelName, group, `processing the model '${mongooseModel.modelName}'`)
-        }
-        else if (
-          this.accessGroups[group].length && roboModel.namespaces.length
-          && !this.accessGroups[group].some(namespace => roboModel.namespaces.includes(namespace))
-        ) {
-          this.logger.LogIncorrectAccessGroupNamespaceInModel(mongooseModel.modelName, group, this.accessGroups[group], roboModel.namespaces, `processing the model '${mongooseModel.modelName}'`)
+          target[groupType].unshift(...this.adminGroups[namespace])
         }
       }
+      else {
+        this.logger.logIncorrectAdminGroups(this.adminGroups, `processing the admin groups of the model '${model.model.modelName}'`)
+      }
+    }
+  }
 
-      // we add the admin groups to the access groups of the model
-      if (this.adminGroups) {
-        if (Array.isArray(this.adminGroups)) {
-          roboModel[groupType].unshift(...this.adminGroups)
-        }
-        else if (typeof this.adminGroups == 'object') {
-          for (const namespace of roboModel.namespaces) {
-            if (!this.adminGroups[namespace])
-              continue
+  /** We check if there are unknown access groups in 'source', and if so, we warn the user */
+  validateGroups(source: WithAccessGroups<AccessGroup>, model: Model<Namespace, AccessGroup>) {
+    for (const groupType of Object.values(this.groupTypes)) {
+      if (!source[groupType])
+        continue
 
-            roboModel[groupType].unshift(...this.adminGroups[namespace])
-          }
+      for (const group of source[groupType]) {
+        if (!this.accessGroups[group]) {
+          this.logger.logUnknownAccessGroupInModel(model.model.modelName, group, `processing the model '${model.model.modelName}'`)
         }
-        else {
-          this.logger.LogIncorrectAdminGroups(this.adminGroups, `processing the admin groups of the model '${mongooseModel.modelName}'`)
+        else if (
+          this.accessGroups[group].length && model.namespaces.length
+          && !this.accessGroups[group].some(namespace => model.namespaces.includes(namespace))
+        ) {
+          this.logger.logIncorrectAccessGroupNamespaceInModel(model.model.modelName, group, this.accessGroups[group], model.namespaces, `processing the model '${model.model.modelName}'`)
         }
       }
     }
@@ -282,210 +310,216 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Generates a robogo schema instance from a mongoose model instance. */
-  generateSchema(model: mongoose.Model<unknown>) {
-    const fields: RoboField<AccessGroup>[] = []
-
-    if(model.modelName === 'Project') {
-      model.schema.eachPath((_, type) => this.generateRoboField(fields, type) )
-    }
-
-    return fields
+  generateSchema(model: Model<Namespace, AccessGroup>) {
+    console.log(model.model.modelName)
+    return Object.values(model.model.schema.paths)
+      .filter(type => type.path !== '_id' && type.path !== '__v')
+      .map(type => this.generateRoboField(model, model.model.schema, type))
   }
 
-  generateRoboField(fields: RoboField<AccessGroup>[], type: mongoose.SchemaType) {
+  /** Generates a RoboField instance from a mongoose SchemaType */
+  generateRoboField(model: Model<Namespace, AccessGroup>, schema: mongoose.Schema, type: mongoose.SchemaType): RoboField<AccessGroup> {
     const roboField: RoboField<AccessGroup> = {
       key: type.path,
-      type: type.instance,
+      type: this.getRoboTypeFromSchemaType(type),
       props: type.options.props || {},
       readGuards: type.options.readGuards || [],
       writeGuards: type.options.writeGuards || [],
-      readGroups: type.options.readGroups || [],
-      writeGroups: type.options.writeGroups || [],
     }
 
     if(type.instance === 'Array')
       roboField.isArray = true
-    if(type.options.required)
-      roboField.required = true
-    if(type.options.name)
-      roboField.name = type.options.name
-    if(type.options.description)
-      roboField.description = type.options.description
-    if(type.options.marked)
-      roboField.marked = type.options.marked
-    if(type.options.hidden)
-      roboField.hidden = type.options.hidden
-    if(type.options.ref)
-      roboField.ref = type.options.ref
-    if(type.options.enum)
-      roboField.enum = type.options.enum
-    if(type.options.autopopulate)
-      roboField.autopopulate = type.options.autopopulate
-    if(type.options.default)
-      roboField.default = type.options.default
-    if(type.options.subfields)
-      roboField.subfields = type.options.subfields
 
-    if(type.schema)
-      type.schema.eachPath((_, type) => this.generateRoboField(roboField.subfields!, type) )
+    // these keys are only added if specified
+    const optionKeys = ['required', 'name', 'description', 'marked', 'hidden', 'enum', 'autopopulate', 'default', 'readGroups', 'writeGroups'] as const
+    for(const key of optionKeys) {
+      if(type.options.hasOwnProperty(key))
+        roboField[key] = type.options[key]
+    }
 
-    fields.push(roboField)
+    if(type.options.hasOwnProperty('ref')) {
+      const isModelInstance = typeof type.options.ref === 'function'
+      roboField.ref = isModelInstance ? type.options.ref.modelName : type.options.ref
+    }
+
+    this.addAdminGroups(roboField, model)
+    this.validateGroups(roboField, model)
+
+    if(roboField.isArray)
+      this.addEmbeddedProperties(model, schema, roboField)
+
+    if(type.schema) {
+      roboField.type = 'Object'
+      roboField.subfields = Object.values(type.schema.paths)
+        .filter(type => type.path !== '_id')
+        .map(t => this.generateRoboField(model, type.schema, t))
+    }
+
+    return roboField
   }
 
-  // /**
-  //  * Removes circular references from the schemas and saves this copy of them.
-  //  * Theese are the schema types, that can be turned into JSON when needed.
-  //  */
-  // GenerateDecycledSchemas() {
-  //   for (const modelName in this.schemas[this.baseDBString]) {
-  //     const DecycledSchema = this.CopySubfields({ subfields: this.schemas[this.baseDBString][modelName] }) // We copy the top level of fields
-  //     this.decycledSchemas[modelName] = DecycledSchema.subfields // Theese new fields will be the top level of the decycled schema
+  /** Extrancts and translates the mongoose schema type to a robogo type format */
+  getRoboTypeFromSchemaType(type: mongoose.SchemaType): string {
+    switch(type.instance) {
+      case 'ObjectID': return 'Object'
+      case 'Mixed': return 'Object'
+      case 'Embedded': return 'Object'
+      default: return type.instance
+    }
+  }
 
-  //     for (const field of this.decycledSchemas[modelName])
-  //       this.DecycleField(field)
-  //   }
-  // }
+  addEmbeddedProperties(model: Model<Namespace, AccessGroup>, schema: mongoose.Schema, roboField: RoboField<AccessGroup>) {
+    const embeddedType = schema.path(`${roboField.key}.$`)
+    if(!embeddedType)
+      return
 
-  // /**
-  //  * Recursively copies the given fields and their subfields, until circular reference is detected
-  //  * @param {object} field - A robogo field descriptor
-  //  * @param {Array} [refs] - This parameter should be leaved empty
-  //  */
-  // DecycleField(field, refs = []) {
-  //   if (!field.subfields)
-  //     return
+    const subField = this.generateRoboField(model, schema, embeddedType)
 
-  //   const refId = `${field.DBString}:${field.ref}`
-  //   if (refs.includes(refId))
-  //     return field.subfields = [] // if a ref was already present once in one of the parent fields, we stop
-  //   if (field.ref)
-  //     refs.push(refId) // we collect the refs of the fields that we once saw
+    roboField.type = subField.type
+    roboField.props = {...roboField.props, ...subField.props}
+    roboField.readGuards = [...roboField.readGuards, ...subField.readGuards]
+    roboField.writeGuards = [...roboField.writeGuards, ...subField.writeGuards]
+    
+    // add some properties if they do not exist
+    const keysToCopy = ['name', 'description', 'marked', 'hidden', 'ref', 'enum', 'default', 'autopopulate'] as const
+    for(const key of keysToCopy) {
+      if(subField[key] !== undefined)
+        // @ts-expect-error this is ok
+        roboField[key] ??= subField[key]
+    }
 
-  //   this.CopySubfields(field)
+    // merge or set read and write access groups
+    for(const groupType of Object.values(this.groupTypes)) {
+      if(subField[groupType]) {
+        if(roboField[groupType])
+          roboField[groupType] = [...roboField[groupType], ...subField[groupType]]
+        else
+          roboField[groupType] = subField[groupType]
+      }
+    }
+  }
+  
+  plugInFieldRef(field: RoboField<AccessGroup>, modelName: string) {
+    if (field.ref) {
+      if (field.ref == 'RoboFile')
+        field.subfields = this.roboFileShema // RoboFile is not stored in the "Schemas" object as it comes from this library not the user.
+      else if (this.schemas[field.ref])
+        field.subfields = this.schemas[field.ref] // If the ref is known as a schema, then the fields new subfields are the fields of that schema
+      else
+        this.logger.logUnknownReference(modelName, field.key, field.ref, `processing the field '${modelName} -> ${field.key}'`)
+    }
+    else if (field.subfields) {
+      for (const fObj of field.subfields)
+        this.plugInFieldRef(fObj, field.ref || modelName)
+    }
+  }
 
-  //   for (const f of field.subfields) // do the same process for every child field passing along the collected refs
-  //     this.DecycleField(f, [...refs])
-  // }
+  /** Creates a copy of the schemas with circular references removed from them */
+  generateDecycledSchemas() {
+    for (const modelName in this.schemas)
+      this.decycledSchemas[modelName] = this.schemas[modelName].map(field => this.decycleField(field))
+  }
 
-  // /**
-  //  * Copies one level of the subfields of the given field descriptor
-  //  * @param {object} field - A robogo field descriptor
-  //  */
-  // CopySubfields(field) {
-  //   field.subfields = [...field.subfields] // copying the subfields array
+  /** Checks if 'field' is referencing a model, which was already referenced earlier in the tree and if so it removes the subfields */
+  decycleField(field: RoboField<AccessGroup>, visitedRefs: string[] = []): RoboField<AccessGroup> {
+    const decycledField = {...field}
 
-  //   for (let i = 0; i < field.subfields.length; ++i)
-  //     field.subfields[i] = { ...field.subfields[i] } // copying the descriptor object of the subfields
+    if(field.ref) {
+      if(visitedRefs.includes(field.ref))
+        decycledField.subfields = []
+    
+      visitedRefs.push(field.ref)
+    }
+    
+    if (decycledField.subfields)
+      decycledField.subfields = decycledField.subfields.map(f => this.decycleField(f, visitedRefs))
 
-  //   return field
-  // }
+    return decycledField
+  }
 
-  // /**
-  //  * Generates a PathSchema descriptor for every schema handled by robogo
-  //  */
-  // GeneratePathSchemas() {
-  //   for (const modelName in this.decycledSchemas) {
-  //     this.pathSchemas[modelName] = {}
+  /** Creates a flat representation for the schemas, in which fields can be accessed with a '.' separated path */
+  generatePathSchemas() {
+    for (const modelName in this.decycledSchemas) {
+      this.pathSchemas[modelName] = {}
 
-  //     for (const field of this.decycledSchemas[modelName])
-  //       this.GeneratePathSchema(field, this.pathSchemas[modelName])
-  //   }
-  // }
+      for (const field of this.decycledSchemas[modelName])
+        this.generatePathSchema(modelName, field)
+    }
+  }
 
-  // /**
-  //  * Recursively generates <FieldPath, Field> entries for the field given and its subfields.
-  //  * @param {object} field - A robogo field descriptor
-  //  * @param {object} acc - Generated entries will be stored in this object
-  //  * @param {string} [prefix] - This parameter should be leaved empty
-  //  */
-  // GeneratePathSchema(field, acc, prefix = '') {
-  //   acc[`${prefix}${field.key}`] = field
+  /** Recursively adds a field and its subfields to this.decycledSchemas[modelName] */
+  generatePathSchema(modelName: string, field: RoboField<AccessGroup>, prefix = '') {
+    const path = `${prefix}${field.key}`
+    this.pathSchemas[modelName][path] = field
 
-  //   if (field.subfields) {
-  //     for (const f of field.subfields)
-  //       this.GeneratePathSchema(f, acc, `${prefix}${field.key}.`)
-  //   }
-  // }
+    if (field.subfields) {
+      for (const f of field.subfields)
+        this.generatePathSchema(modelName, f, `${path}.`)
+    }
+  }
 
-  // /**
-  //  * Calculates the highest read and write accesses for every model and saves it to this.Models[DBString][modelName].highestAccesses
-  //  */
-  // CollectHighestAccessesOfModels() {
-  //   for (const modelName in this.decycledSchemas) {
-  //     const accessesOfModel = this.CollectHighestAccessesOfField({
-  //       subfields: this.decycledSchemas[modelName],
-  //       readGroups: this.models[modelName].readGroups,
-  //       writeGroups: this.models[modelName].writeGroups,
-  //     })
+  /** Calculates the smallest sets of access groups for every model which are enough to read/write every field in them */
+  collectMinimalRequiredAccessesGroupSetsOfModels() {
+    for (const modelName in this.decycledSchemas) {
+      this.models[modelName].minimalRequriedAccessGroupSets = this.collectMinimalRequiredAccessGroupSets({ // TODO: check this change
+        subfields: this.decycledSchemas[modelName],
+        readGroups: this.models[modelName].readGroups,
+        writeGroups: this.models[modelName].writeGroups,
+      })
+    }
+  }
 
-  //     this.models[modelName].highestAccesses = {
-  //       read: accessesOfModel.read.map(group => [...group]),
-  //       write: accessesOfModel.write.map(group => [...group]),
-  //     }
-  //   }
-  // }
+  /** Calculates the smallest sets of access groups to be able to read/write a field and its subfields. */
+  collectMinimalRequiredAccessGroupSets(field: Pick<RoboField<AccessGroup>, 'subfields' | 'readGroups' | 'writeGroups' | 'ref'>): Record<AccessType, AccessGroup[][]> {
+    const currReadGroups = (field.readGroups || []).map(a => [a])
+    const currWriteGroups = (field.writeGroups || []).map(a => [a])
 
-  // /**
-  //  * Recursively calculates the highest read and write accesses for a model.
-  //  * @param {object} field - A robogo field descriptor
-  //  * @param {number} [refDepth] - The recursive depth by reference eof the fields model
-  //  * @returns {{read: string[][], write: string[][]}}
-  //  */
-  // CollectHighestAccessesOfField(field) {
-  //   const currReadGroups = (field.readGroups || []).map(a => [a])
-  //   const currWriteGroups = (field.writeGroups || []).map(a => [a])
+    if (!field.subfields?.length || field.ref == 'RoboFile') { // if the field is a 'leaf' then we return our accesses
+      return {
+        read: currReadGroups,
+        write: currWriteGroups,
+      }
+    }
 
-  //   if (!field.subfields || !field.subfields.length || field.ref == 'RoboFile') { // if the field is a 'leaf' then we return our accesses
-  //     return {
-  //       read: currReadGroups,
-  //       write: currWriteGroups,
-  //     }
-  //   }
+    const subfieldResults = (field.ref && this.models[field.ref].minimalRequriedAccessGroupSets)
+      ? [this.models[field.ref].minimalRequriedAccessGroupSets!] // SAFETY: This cannot be null, as it is checked in the row above
+      : field.subfields.map(f => this.collectMinimalRequiredAccessGroupSets(f))
 
-  //   const subfieldResults = (field.ref && this.models[field.ref].highestAccesses)
-  //     ? [this.models[field.ref].highestAccesses]
-  //     : field.subfields.map(f => this.CollectHighestAccessesOfField(f))
+    return {
+      read: this.mergeAccessGroupCombinations(currReadGroups, subfieldResults.map(r => r.read)),
+      write: field.ref
+        ? currWriteGroups
+        : this.mergeAccessGroupCombinations(currWriteGroups, subfieldResults.map(r => r.write)),
+    }
+  }
 
-  //   return {
-  //     read: this.MergeAccessGroupCombinations(currReadGroups, subfieldResults.map(r => r.read)),
-  //     write: field.ref
-  //       ? currWriteGroups
-  //       : this.MergeAccessGroupCombinations(currWriteGroups, subfieldResults.map(r => r.write)),
-  //   }
-  // }
+  /** Merges the access group combinations in "sourceCombinationsArray" with "targetCombinations" into new minimal access group combinations */
+  mergeAccessGroupCombinations(targetCombinations: AccessGroup[][], sourceCombinationsArray: AccessGroup[][][]): AccessGroup[][] {
+    sourceCombinationsArray = sourceCombinationsArray.filter(g => g.length)
 
-  // /**
-  //  * Merges the access group combinations in "sourceCombinationsArray" with "targetCombinations" into new minimal access group combinations
-  //  * @param {string[][]} targetCombinations
-  //  * @param {string[][][]} sourceCombinationsArray
-  //  * @returns {string[][]}
-  //  */
-  // MergeAccessGroupCombinations(targetCombinations, sourceCombinationsArray) {
-  //   sourceCombinationsArray = sourceCombinationsArray.filter(g => g.length)
+    if (!sourceCombinationsArray.length)
+      return targetCombinations
 
-  //   if (!sourceCombinationsArray.length)
-  //     return targetCombinations
+    if (!targetCombinations.length)
+      targetCombinations = [[]] // TODO: check this change
 
-  //   if (!targetCombinations.length)
-  //     targetCombinations.push([])
+    let resultCombinations = targetCombinations
 
-  //   let resultCombinations = targetCombinations
+    for (const sourceCombinations of sourceCombinationsArray) {
+      const currentCombinations = new MinimalSetCollection<AccessGroup>()
 
-  //   for (const sourceCombinations of sourceCombinationsArray) {
-  //     const currentCombinations = new MinimalSetCollection()
+      for (const sourceCombination of sourceCombinations) {
+        for (const prevCombination of resultCombinations) {
+          const newCombination = new Set<AccessGroup>([...prevCombination, ...sourceCombination])
+          currentCombinations.insert(newCombination)
+        }
+      }
 
-  //     for (const sourceCombination of sourceCombinations) {
-  //       for (const prevCombination of resultCombinations) {
-  //         const newCombination = new Set([...prevCombination, ...sourceCombination])
-  //         currentCombinations.insert(newCombination)
-  //       }
-  //     }
+      resultCombinations = currentCombinations.getArray().map(combination => [...combination])
+    }
 
-  //     resultCombinations = currentCombinations.getArray().map(combination => [...combination])
-  //   }
-
-  //   return resultCombinations
-  // }
+    return resultCombinations
+  }
 
   // /**
   //  * Returns the field paths of a model that are safe to be used with fuse.js. JSDoc
@@ -640,6 +674,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   //     field.type = 'Object'
   //     field.subfields = []
   //   }
+
   //   // If a Mixed type is found we try to check if it was intentional or not
   //   // if not, then we warn the user about the possible error
   //   // TODO: Find a better way to do this
@@ -679,27 +714,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   //   }
 
   //   return field
-  // }
-
-  // /**
-  //  * Recursively plugs in the references of the given field and its subfields.
-  //  * @param {object} field - A robogo field descriptor
-  //  */
-  // plugInFieldRef(field, modelName) {
-  //   if (!field.ref && !field.subfields)
-  //     return
-
-  //   if (field.ref) {
-  //     if (field.ref == 'RoboFile')
-  //       return field.subfields = this.roboFileShema // RoboFile is not stored in the "Schemas" object as it comes from this library not the user.
-  //     if (this.schemas[field.DBString][field.ref])
-  //       return field.subfields = this.schemas[field.DBString][field.ref] // If the ref is known as a schema, then the fields new subfields are the fields of that schema
-
-  //     return this.logger.LogUnknownReference(modelName, field.key, field.ref, `processing the field '${modelName} -> ${field.key}'`)
-  //   }
-
-  //   for (const fObj of field.subfields)
-  //     this.plugInFieldRef(fObj, field.ref || modelName)
   // }
 
   // /**
@@ -825,83 +839,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   // }
 
   // /**
-  //  * A helper function, that is a template for the CRUDS category routes.
-  //  * @param {object} req
-  //  * @param {object} res
-  //  * @param {Function} mainPart
-  //  * @param {Function} responsePart
-  //  * @param {string} operation
-  //  */
-  // CRUDSRoute(req, res, mainPart, responsePart, operation) {
-  //   // if the model is unkown send an error
-  //   if (!this.schemas[this.baseDBString][req.params.model]) {
-  //     this.logger.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
-  //     return res.status(400).send('MISSING MODEL')
-  //   }
-
-  //   let mode = 'read'
-  //   switch (operation) {
-  //     case 'C': mode = 'write'; break
-  //     case 'U': mode = 'write'; break
-  //     case 'D': mode = 'write'; break
-  //   }
-
-  //   // the code below calls the middleware and normal parts of the route and handles their errors correspondingly
-  //   const MiddlewareFunctions = this.middlewares[req.params.model][operation]
-  //   MiddlewareFunctions.before.call(this, req, res)
-  //     .then(() => {
-  //       this.HasModelAccess(req.params.model, mode, req)
-  //         .then((hasAccess) => {
-  //           if (!hasAccess)
-  //             return res.status(403).send()
-
-  //           mainPart.call(this, req, res)
-  //             .then((result) => {
-  //               MiddlewareFunctions.after.call(this, req, res, result)
-  //                 .then(() => {
-  //                   responsePart.call(this, req, res, result)
-  //                     .catch((err) => { res.status(500).send(err); console.error(err) })
-  //                 })
-  //                 .catch(message => this.logger.LogMiddlewareMessage(req.params.model, operation, 'after', message))
-  //             })
-  //             .catch((err) => { res.status(500).send(err); console.error(err) })
-  //         })
-  //     })
-  //     .catch(message => this.logger.LogMiddlewareMessage(req.params.model, operation, 'before', message))
-  // }
-
-  // HasModelAccess(model, mode, req) {
-  //   const groupType = this.groupTypes[mode]
-
-  //   if (mode == 'read' && !req.checkReadAccess)
-  //     return Promise.resolve(true)
-  //   if (mode == 'write' && !req.checkWriteAccess)
-  //     return Promise.resolve(true)
-
-  //   if (!this.HasGroupAccess(this.models[model][groupType], req.accessGroups)) {
-  //     return Promise.resolve(false)
-  //   }
-
-  //   if (this.models[model].accessGuards) {
-  //     const promises = this.models[model].accessGuards.map(guard => Promisify(guard(req)))
-  //     return Promise.all(promises)
-  //       .then(res => !res.some(r => !r))
-  //   }
-
-  //   return Promise.resolve(true)
-  // }
-
-  // /**
-  //  * Checks if the two given arrays have an intersection or not.
-  //  * @param {Array<string>} goodGroups
-  //  * @param {Array<string>} accessGroups
-  //  * @returns boolean
-  //  */
-  // HasGroupAccess(goodGroups, accessGroups) {
-  //   return !goodGroups || goodGroups.some(gg => accessGroups.includes(gg))
-  // }
-
-  // /**
   //  * Removes every field from an array of documents, which need an access group not included in then given parameter.
   //  * @param {string | Array} fields
   //  * @param {Array} documents
@@ -917,151 +854,13 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   //   }
 
   //   const guardPreCache = await this.calculateGuardPreCache(req, fields, mode)
-  //   const promises = documents.map(doc => this.RemoveDeclinedFieldsFromObject({ fields: model || fields, object: doc, mode, req, guardPreCache }))
+  //   const promises = documents.map(doc => this.removeDeclinedFieldsFromObject({ fields: model || fields, object: doc, mode, req, guardPreCache }))
 
   //   return Promise.all(promises)
   // }
 
-  // /**
-  //  * Removes declined fields from an object.
-  //  * @async
-  //  * @param {object} params
-  //  * @param {Array | string} params.fields
-  //  * @param {object} params.object
-  //  * @param {string} params.mode
-  //  * @param {object} params.req
-  //  * @param {string} [params.DBString]
-  //  * @param {Map?} [params.guardPreCache]
-  //  * @returns {Promise}
-  //  */
-  // async RemoveDeclinedFieldsFromObject({ fields, object, mode, req, DBString = this.baseDBString, guardPreCache = null }) { // todo update everywhere to obejct params
-  //   if (!object)
-  //     return Promise.resolve(object)
 
-  //   let model = null
-  //   if (typeof fields == 'string') { // if model name was given, then we get the models fields
-  //     model = fields
-  //     fields = this.schemas[DBString][model]
-  //   }
-
-  //   const fieldsInObj = fields.filter(field => object.hasOwnProperty(field.key))
-  //   if (!fieldsInObj.length)
-  //     return Promise.resolve(object)
-
-  //   if (model) {
-  //     const hasModelAccess = await this.HasModelAccess(model, mode, req)
-  //     if (!hasModelAccess) {
-  //       delete object._id
-
-  //       for (const field of fieldsInObj)
-  //         delete object[field.key]
-
-  //       return object
-  //     }
-  //   }
-
-  //   const checkGroupAccess = !model || !this.hasEveryNeededAccessGroup(model, mode, req.accessGroups)
-  //   const promises = []
-
-  //   guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fieldsInObj, mode)
-  //   for (const field of fieldsInObj) {
-  //     const promise = this.IsFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache })
-  //       .then((declined) => {
-  //         if (declined) {
-  //           delete object[field.key]
-  //         }
-  //         else if (field.subfields && (mode === 'read' || !field.ref)) {
-  //           const fieldsOrModel = (field.ref && field.ref != 'RoboFile') ? field.ref : field.subfields
-
-  //           if (Array.isArray(object[field.key])) {
-  //             const subPromises = object[field.key].map(obj => this.RemoveDeclinedFieldsFromObject({ fields: fieldsOrModel, object: obj, mode, req, guardPreCache, DBString: field.DBString }))
-  //             return Promise.all(subPromises)
-  //           }
-  //           else {
-  //             return this.RemoveDeclinedFieldsFromObject({ fields: fieldsOrModel, object: object[field.key], mode, req, guardPreCache, DBString: field.DBString })
-  //           }
-  //         }
-  //       })
-
-  //     promises.push(promise)
-  //   }
-
-  //   return Promise.all(promises)
-  // }
-
-  // async calculateGuardPreCache(req, fields, mode) {
-  //   const guardType = this.guardTypes[mode]
-
-  //   const guards = new Set()
-  //   for (const field of fields) {
-  //     for (const guard of field[guardType]) {
-  //       guards.add(guard)
-  //     }
-  //   }
-
-  //   const promises = [...guards].map(g => Promisify(g.call(this, req)))
-  //   const res = await Promise.allSettled(promises)
-
-  //   const preCache = new Map()
-  //   for (const guard of guards) {
-  //     const { status, value } = res.shift()
-  //     const guardValue = status == 'fulfilled' && value
-
-  //     preCache.set(guard, guardValue)
-  //   }
-
-  //   return preCache
-  // }
-
-  // /**
-  //  * Checks if a field is declined based on specified parameters.
-  //  * @param {object} params
-  //  * @param {object} params.req
-  //  * @param {object} params.field
-  //  * @param {string} params.mode
-  //  * @param {boolean} [params.checkGroupAccess]
-  //  * @param {Map?} [params.guardPreCache]
-  //  * @returns {Promise<boolean>}
-  //  */
-  // IsFieldDeclined({ req, field, mode, checkGroupAccess = true, guardPreCache = null }) {
-  //   const shouldCheckAccess = mode == 'read' ? req.checkReadAccess : req.checkWriteAccess
-  //   if (!shouldCheckAccess)
-  //     return Promise.resolve(false)
-
-  //   if (checkGroupAccess) {
-  //     const groupType = this.groupTypes[mode]
-  //     if (!this.HasGroupAccess(field[groupType], req.accessGroups)) {
-  //       return Promise.resolve(true)
-  //     }
-  //   }
-
-  //   return this.IsFieldDecliendByGuards(req, field, this.guardTypes[mode], guardPreCache)
-  // }
-
-  // /**
-  //  * Checks if a field is declined by guards.
-  //  * @param {object} req
-  //  * @param {object} field
-  //  * @param {string} guardType
-  //  * @param {Map?} [guardPreCache]
-  //  * @returns {Promise<boolean>}
-  //  */
-  // IsFieldDecliendByGuards(req, field, guardType, guardPreCache = null) {
-  //   if (!field[guardType].length)
-  //     return Promise.resolve(false)
-
-  //   const promises = field[guardType].map((guard) => {
-  //     if (guardPreCache && guardPreCache.has(guard))
-  //       return Promise.resolve(guardPreCache.get(guard))
-
-  //     return Promisify(guard.call(this, req))
-  //   })
-
-  //   return Promise.all(promises)
-  //     .then(res => res.some(r => !r))
-  //     .catch(() => true)
-  // }
-
+  
   // async RemoveDeclinedFieldsFromSchema(fields, req, mode) {
   //   let model = null
   //   if (typeof fields == 'string') { // if model name was given, then we get the models fields
@@ -1077,7 +876,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   //   const guardPreCache = await this.calculateGuardPreCache(req, fields, mode)
   //   for (const field of fields) {
-  //     const promise = this.IsFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache })
+  //     const promise = this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache })
   //       .then((declined) => {
   //         if (declined)
   //           return Promise.reject()
@@ -1110,8 +909,8 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   //   // first we check for read and write accesses on the model itself
   //   return Promise.all([
-  //     this.HasModelAccess(model, 'read', req),
-  //     this.HasModelAccess(model, 'write', req),
+  //     this.hasModelAccess(model, 'read', req),
+  //     this.hasModelAccess(model, 'write', req),
   //   ])
   //     .then(([canReadModel, canWriteModel]) => {
   //       accesses.model = {
@@ -1177,7 +976,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   // async getFieldAccesses({ fields, mode, req, checkGroupAccess, accesses = {}, prefix = '', guardPreCache = null }) {
   //   guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fields, mode)
 
-  //   const promises = fields.map(field => this.IsFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache }))
+  //   const promises = fields.map(field => this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache }))
   //   const results = await Promise.all(promises)
 
   //   const subPromises = []
@@ -1223,16 +1022,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   //     .catch(error => res.status(500).send(error))
   // }
 
-  // /**
-  //  * Checks if models highest accesses contains an access group whose all elements are in the users accesses
-  //  * @param {string} modelName
-  //  * @param {string} key
-  //  * @param {Array} accessGroups
-  //  */
-  // hasEveryNeededAccessGroup(modelName, key, accessGroups) {
-  //   return this.models[modelName].highestAccesses[key].some(ag => ag.every(a => accessGroups.includes(a)))
-  // }
-
   // async visitFilter({ filter, groupVisitor = () => {}, conditionVisitor = (_path, value) => value }) {
   //   const result = {}
   //   const promises = []
@@ -1247,13 +1036,13 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   //       const conditionPromises = filter[outerKey].map(condition => this.visitFilter({ filter: condition, groupVisitor, conditionVisitor }))
   //       const conditions = await Promise.all(conditionPromises)
 
-  //       const promise = Promisify(groupVisitor(conditions))
+  //       const promise = promisify(groupVisitor(conditions))
   //         .then(value => result[outerKey] = value)
 
   //       promises.push(promise)
   //     }
   //     else {
-  //       const promise = Promisify(conditionVisitor(outerKey, filter[outerKey]))
+  //       const promise = promisify(conditionVisitor(outerKey, filter[outerKey]))
   //         .then(value => result[outerKey] = value)
 
   //       promises.push(promise)
@@ -1290,7 +1079,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   //       return conditions
   //     },
   //     conditionVisitor: async (path, value) => {
-  //       const isDeclined = await this.IsFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
+  //       const isDeclined = await this.isFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
   //       if (isDeclined)
   //         return Promise.reject()
 
@@ -1315,7 +1104,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   //   const promises = []
   //   for (const path in sort) {
-  //     const promise = this.IsFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
+  //     const promise = this.isFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
   //       .then((isDeclined) => {
   //         if (isDeclined)
   //           delete sort[path]
@@ -1328,441 +1117,647 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   //   return sort
   // }
 
-  // /**
-  //  * Generates all the routes of robogo and returns the express router.
-  //  */
-  // GenerateRoutes() {
-  //   Router.use((req, res, next) => {
-  //     if (req.accessGroups === undefined)
-  //       req.accessGroups = []
-
-  //     if (req.checkReadAccess === undefined)
-  //       req.checkReadAccess = this.checkAccess
-
-  //     if (req.checkWriteAccess === undefined)
-  //       req.checkWriteAccess = this.checkAccess
-
-  //     next()
-  //   })
-
-  //   // CREATE routes
-  //   Router.post('/create/:model', (req, res) => {
-  //     async function mainPart(req, res) {
-  //       if (req.checkWriteAccess)
-  //         await this.RemoveDeclinedFieldsFromObject({ fields: req.params.model, object: req.body, mode: 'write', req })
-
-  //       const Model = this.MongooseConnection.model(req.params.model)
-  //       const ModelInstance = new Model(req.body)
-  //       return ModelInstance.save()
-  //     }
-
-  //     async function responsePart(req, res, result) {
-  //       result = result.toObject() // this is needed, because mongoose returns an immutable object by default
-
-  //       if (req.checkReadAccess)
-  //         await this.RemoveDeclinedFieldsFromObject({ fields: req.params.model, object: result, mode: 'read', req })
-
-  //       res.send(result)
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'C')
-  //   })
-  //   // ----------------
-
-  //   // READ routes
-  //   // these routes will use "lean" so that results are not immutable
-  //   Router.get('/read/:model', (req, res) => {
-  //     async function mainPart(req, res) {
-  //       const filter = await this.processFilter(req)
-  //       const sort = await this.processSort(req)
-
-  //       return this.MongooseConnection.model(req.params.model)
-  //         .find(filter, req.query.projection)
-  //         .sort(sort)
-  //         .skip(Number(req.query.skip) || 0)
-  //         .limit(Number(req.query.limit) || null)
-  //         .lean({ autopopulate: true, virtuals: true, getters: true })
-  //     }
-
-  //     async function responsePart(req, res, results) {
-  //       if (req.checkReadAccess)
-  //         await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
-
-  //       res.send(results)
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'R')
-  //   })
-
-  //   Router.get('/get/:model/:id', (req, res) => {
-  //     async function mainPart(req, res) {
-  //       return this.MongooseConnection.model(req.params.model)
-  //         .findOne({ _id: req.params.id }, req.query.projection)
-  //         .lean({ autopopulate: true, virtuals: true, getters: true })
-  //     }
-
-  //     async function responsePart(req, res, result) {
-  //       if (req.checkReadAccess)
-  //         await this.RemoveDeclinedFieldsFromObject({ fields: req.params.model, object: result, mode: 'read', req })
-
-  //       res.send(result)
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'R')
-  //   })
-
-  //   Router.get('/search/:model', (req, res) => {
-  //     async function mainPart(req, res) {
-  //       const filter = await this.processFilter(req)
-
-  //       return this.MongooseConnection.model(req.params.model)
-  //         .find(filter, req.query.projection)
-  //         .lean({ autopopulate: true, virtuals: true, getters: true })
-  //     }
-
-  //     async function responsePart(req, res, results) {
-  //       if (req.checkReadAccess)
-  //         await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
-
-  //       if (!req.query.term)
-  //         return res.send(results)
-
-  //       if (!req.query.threshold)
-  //         req.query.threshold = 0.4
-
-  //       if (!req.query.keys || req.query.keys.length == 0) { // if keys were not given, we search in all keys
-  //         let schema = this.DecycledSchemas[req.params.model]
-
-  //         if (req.checkReadAccess)
-  //           schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
-
-  //         req.query.keys = this.GetSearchKeys(schema, req.query.depth)
-  //       }
-
-  //       const fuse = new Fuse(results, {
-  //         includeScore: false,
-  //         keys: req.query.keys,
-  //         threshold: req.query.threshold,
-  //       })
-
-  //       const matched = fuse.search(req.query.term).map(r => r.item) // fuse.js's results include some other things, then the documents so we need to get them
-  //       res.send(matched)
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'R')
-  //   })
-  //   // ----------------
-
-  //   // UPDATE routes
-  //   Router.patch('/update/:model', (req, res) => {
-  //     async function mainPart(req, res) {
-  //       if (req.checkWriteAccess)
-  //         await this.RemoveDeclinedFieldsFromObject({ fields: req.params.model, object: req.body, mode: 'write', req })
-
-  //       return this.MongooseConnection.model(req.params.model)
-  //         .updateOne({ _id: req.body._id }, req.body)
-  //     }
-
-  //     async function responsePart(req, res, result) {
-  //       res.send(result)
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'U')
-  //   })
-  //   // ----------------
-
-  //   // DELETE routes
-  //   Router.delete('/delete/:model/:id', (req, res) => {
-  //     async function mainPart() {
-  //       const accesses = await this.getAccesses(req.params.model, req)
-
-  //       if (!accesses.model.write || Object.values(accesses.fields).some(({ write }) => !write))
-  //         return Promise.reject('FORBIDDEN')
-
-  //       return this.MongooseConnection.model(req.params.model)
-  //         .deleteOne({ _id: req.params.id })
-  //     }
-
-  //     async function responsePart(req, res, result) {
-  //       res.send(result)
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'D')
-  //   })
-  //   // ----------------
-
-  //   // SERVICE routes
-  //   Router.post('/runner/:service/:fun', (req, res) => {
-  //     this.ServiceRoute(req, res, 'body')
-  //   })
-
-  //   Router.get('/getter/:service/:fun', (req, res) => {
-  //     this.ServiceRoute(req, res, 'query')
-  //   })
-  //   // ----------------
-
-  //   // FILE routes
-  //   if (this.fileDir) {
-  //     Router.use(
-  //       `${this.serveStaticPath}`,
-  //       (req, res, next) => {
-  //         if (!this.fileReadMiddleware)
-  //           return next()
-
-  //         Promisify(this.fileReadMiddleware(req))
-  //           .then(() => next())
-  //           .catch(reason => res.status(403).send(reason))
-  //       },
-  //       express.static(path.resolve(__dirname, this.fileDir), { maxAge: this.maxFileCacheAge }),
-  //     )
-  //     Router.use(`${this.serveStaticPath}`, (req, res) => res.status(404).send('NOT FOUND')) // If a file is not found in FileDir, send back 404 NOT FOUND
-
-  //     Router.post(
-  //       '/fileupload',
-  //       (req, res, next) => {
-  //         if (!this.fileUploadMiddleware)
-  //           return next()
-
-  //         Promisify(this.fileUploadMiddleware(req))
-  //           .then(() => next())
-  //           .catch(reason => res.status(403).send(reason))
-  //       },
-  //       this.upload.single('file'),
-  //       (req, res) => {
-  //         if (req.file.mimetype.startsWith('image'))
-  //           return this.handleImageUpload(req, res)
-
-  //         const multerPath = req.file.path
-  //         const type = req.file.mimetype
-  //         const extension = req.file.originalname.split('.').pop()
-  //         const filePath = `${req.file.filename}.${extension}` // the file will be saved with the extension attached
-
-  //         fs.renameSync(multerPath, `${multerPath}.${extension}`)
-
-  //         const fileData = {
-  //           name: req.file.originalname,
-  //           path: filePath,
-  //           size: req.file.size,
-  //           extension,
-  //           type,
-  //         }
-
-  //         // we create the RoboFile document with the properties of the file
-  //         RoboFileModel.create(fileData, (err, file) => {
-  //           if (err)
-  //             res.status(500).send(err)
-  //           else res.send(file)
-  //         })
-  //       },
-  //     )
-
-  //     Router.post(
-  //       '/fileclone/:id',
-  //       (req, res, next) => {
-  //         if (!this.fileUploadMiddleware)
-  //           return next()
-
-  //         Promisify(this.fileUploadMiddleware(req))
-  //           .then(() => next())
-  //           .catch(reason => res.status(403).send(reason))
-  //       },
-  //       (req, res) => {
-  //         RoboFileModel.findOne({ _id: req.params.id }).lean()
-  //           .then((roboFile) => {
-  //             const realPath = path.resolve(this.fileDir, roboFile.path)
-  //             if (!realPath.startsWith(this.fileDir))
-  //               return Promise.reject('INVALID PATH')
-
-  //             const copyRealPath = realPath.replace('.', '_copy.')
-  //             if (fs.existsSync(realPath))
-  //               fs.copyFileSync(realPath, copyRealPath)
-
-  //             if (roboFile.thumbnailPath) {
-  //               const thumbnailPath = path.resolve(this.fileDir, roboFile.thumbnailPath)
-  //               if (!thumbnailPath.startsWith(this.fileDir))
-  //                 return Promise.reject('INVALID PATH')
-
-  //               const copyThumbnailPath = thumbnailPath.replace('.', '_copy.')
-  //               if (fs.existsSync(thumbnailPath))
-  //                 fs.copyFileSync(thumbnailPath, copyThumbnailPath)
-  //             }
-
-  //             delete roboFile._id
-  //             roboFile.path = roboFile.path.replace('.', '_copy.')
-  //             roboFile.thumbnailPath = roboFile.thumbnailPath.replace('.', '_copy.')
-
-  //             return RoboFileModel.create(roboFile)
-  //           })
-  //           .then(file => res.send(file))
-  //           .catch(err => res.status(500).send(err))
-  //       },
-  //     )
-
-  //     Router.delete(
-  //       '/filedelete/:id',
-  //       (req, res, next) => {
-  //         if (!this.fileDeleteMiddleware)
-  //           return next()
-
-  //         Promisify(this.fileDeleteMiddleware(req))
-  //           .then(() => next())
-  //           .catch(reason => res.status(403).send(reason))
-  //       },
-  //       (req, res) => {
-  //         RoboFileModel.findOne({ _id: req.params.id })
-  //           .then((file) => {
-  //             if (!file)
-  //               return Promise.reject('Unkown file')
-
-  //             // we remove both the file and thumbnail if they exists
-  //             const realPath = path.resolve(this.fileDir, file.path)
-  //             if (!realPath.startsWith(this.fileDir))
-  //               return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
-  //             if (fs.existsSync(realPath))
-  //               fs.unlinkSync(realPath)
-
-  //             if (file.thumbnailPath) {
-  //               const thumbnailPath = path.resolve(this.fileDir, file.thumbnailPath)
-  //               if (!thumbnailPath.startsWith(this.fileDir))
-  //                 return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
-  //               if (fs.existsSync(thumbnailPath))
-  //                 fs.unlinkSync(thumbnailPath)
-  //             }
-
-  //             // we delete the RoboFile document
-  //             return RoboFileModel.deleteOne({ _id: file._id })
-  //           })
-  //           .then(() => res.send())
-  //           .catch(err => res.status(400).send(err))
-  //       },
-  //     )
-  //   }
-  //   // --------------
-
-  //   // SPECIAL routes
-  //   Router.get('/model/:model', (req, res) => {
-  //     async function mainPart(req, res) {
-  //       return await this.HasModelAccess(req.params.model, 'read', req)
-  //     }
-
-  //     async function responsePart(req, res, hasAccess) {
-  //       if (!req.checkReadAccess || hasAccess)
-  //         res.send({ ...this.Models[req.params.model], model: req.params.model })
-  //       else
-  //         res.status(403).send()
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
-  //   })
-
-  //   Router.get('/model', (req, res) => {
-  //     const promises = []
-  //     for (const modelName in this.models) {
-  //       const promise = this.HasModelAccess(modelName, 'read', req)
-  //       promises.push(promise)
-  //     }
-
-  //     Promise.all(promises)
-  //       .then((results) => {
-  //         const models = []
-
-  //         for (const modelName in this.models) {
-  //           if (req.checkReadAccess && !results.shift())
-  //             continue
-
-  //           models.push({ ...this.models[modelName], model: modelName })
-  //         }
-
-  //         res.send(models)
-  //       })
-  //   })
-
-  //   Router.get('/schema/:model', (req, res) => {
-  //     async function mainPart(req, res) {
-  //       return this.DecycledSchemas[req.params.model]
-  //     }
-
-  //     async function responsePart(req, res, result) {
-  //       if (req.checkReadAccess)
-  //         result = await this.RemoveDeclinedFieldsFromSchema(result, req, 'read')
-
-  //       res.send(result)
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
-  //   })
-
-  //   Router.get('/fields/:model', (req, res) => {
-  //     async function mainPart(req, res) {
-  //       let schema = this.DecycledSchemas[req.params.model]
-
-  //       if (req.checkReadAccess)
-  //         schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
-
-  //       const fields = this.GetFields(schema, req.query.depth)
-  //       return fields
-  //     }
-
-  //     async function responsePart(req, res, result) {
-  //       res.send(result)
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
-  //   })
-
-  //   Router.get('/count/:model', (req, res) => {
-  //     async function mainPart(req, res) {
-  //       const filter = await this.processFilter(req)
-
-  //       return this.MongooseConnection.model(req.params.model)
-  //         .countDocuments(filter)
-  //     }
-
-  //     async function responsePart(req, res, result) {
-  //       res.send(String(result))
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
-  //   })
-
-  //   Router.get('/searchkeys/:model', (req, res) => {
-  //     async function mainPart(req, res) {
-  //       let schema = this.DecycledSchemas[req.params.model]
-
-  //       if (req.checkReadAccess)
-  //         schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
-
-  //       return this.GetSearchKeys(schema, req.query.depth)
-  //     }
-
-  //     async function responsePart(req, res, result) {
-  //       res.send(result)
-  //     }
-
-  //     this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
-  //   })
-
-  //   Router.get('/accessesGroups', (req, res) => {
-  //     const result = Object.keys(this.accessGroups)
-  //     res.send(result)
-  //   })
-
-  //   Router.get('/accesses/:model', async (req, res) => {
-  //     try {
-  //       const accesses = await this.getAccesses(req.params.model, req)
-  //       res.send(accesses)
-  //     }
-  //     catch (err) {
-  //       res.status(500).send()
-  //     }
-  //   })
-
-  //   return Router
-  // }
+  /** A helper function, that is a template for the CRUDS category routes. */
+  async CRUDSRoute<T>({operation, req, res, mainPart, responsePart}: {
+    operation: OperationType
+    req: Request,
+    res: Response,
+    mainPart: (req: Request, res: Response) => Promise<T>,
+    responsePart: (req: Request, res: Response, result: T) => Promise<void>,
+  }) {
+    // if the model is unkown send an error
+    if (!this.schemas[req.params.model]) {
+      this.logger.logMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
+      return res.status(400).send('MISSING MODEL')
+    }
+
+    const mode: AccessType = ['C', 'U', 'D'].includes(operation) ? 'write' : 'read'
+
+    // the code below calls the middleware and normal parts of the route and handles their errors correspondingly
+    const middlewareFunctions = this.middlewares[req.params.model][operation]
+    try {
+      await middlewareFunctions.before.call(this, req, res)
+        .catch(err => {throw new MiddlewareError('before', err)})
+
+      const hasAccess = await this.hasModelAccess(req.params.model, mode, req)
+      if (!hasAccess)
+        return res.status(403).send()
+
+      const result = await mainPart.call(this, req, res)
+
+      await middlewareFunctions.after.call(this, req, res, result)
+        .catch(err => {throw new MiddlewareError('after', err)})
+
+      await responsePart.call(this, req, res, result)
+    }
+    catch(err) {
+      if(err instanceof MiddlewareError) {
+        this.logger.logMiddlewareMessage(req.params.model, operation, err.type, err.message)
+      }
+      else {
+        res.status(500).send(err)
+        console.error(err)
+      }
+    }    
+  }
+
+  async hasModelAccess(modelName: string, mode: AccessType, req: Request): Promise<boolean> {
+    if (mode == 'read' && !req.checkReadAccess)
+      return true
+    if (mode == 'write' && !req.checkWriteAccess)
+      return true
+    
+    const groupType = this.groupTypes[mode]
+    if (!this.hasGroupAccess(this.models[modelName][groupType], req.accessGroups as AccessGroup[]))
+      return false
+
+    const guardType = this.guardTypes[mode]
+    if (this.models[modelName][guardType]) {
+      const promises = this.models[modelName][guardType].map(guard => promisify(guard(req)))
+      const res = await Promise.all(promises)
+      return !res.some(r => !r)
+    }
+
+    return true
+  }
+
+  /** Checks if the two given arrays have an intersection or not. */
+  hasGroupAccess(goodGroups: undefined | AccessGroup[], accessGroups: AccessGroup[]) {
+    return !goodGroups || goodGroups.some(gg => accessGroups.includes(gg))
+  }
+
+   /** Removes declined fields from an object. */
+  async removeDeclinedFieldsFromObject<T extends Partial<MongooseDocument>>({object, mode, req, guardPreCache, ...params}: {
+    object: T
+    mode: AccessType
+    req: Request
+    guardPreCache: GuardPreCache
+  } & ({
+    fields: RoboField<AccessGroup>[]
+  } | {
+    modelName: string
+  })
+): Promise<Partial<T>> {
+    if (!object)
+      return object
+
+    const fields = 'fields' in params ? params.fields : this.schemas[params.modelName]
+    const fieldsInObj = fields.filter(field => object.hasOwnProperty(field.key))
+    if (!fieldsInObj.length)
+      return object
+
+    if ('modelName' in params) {
+      const hasModelAccess = await this.hasModelAccess(params.modelName, mode, req)
+      if (!hasModelAccess) {
+        delete object._id
+
+        for (const field of fieldsInObj)
+          delete object[field.key]
+
+        return object
+      }
+    }
+
+    const checkGroupAccess = !('modelName' in params) || !this.hasEveryNeededAccessGroup(params.modelName, mode, req.accessGroups as AccessGroup[])
+    const promises = []
+
+    guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fieldsInObj, mode)
+    for (const field of fieldsInObj) {
+      const promise = this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache })
+        .then((declined) => {
+          if (declined) {
+            delete object[field.key]
+          }
+          else if (field.subfields && (mode === 'read' || !field.ref)) {
+            const fieldsOrModel = (field.ref && field.ref != 'RoboFile') ? field.ref : field.subfields
+
+            if (Array.isArray(object[field.key])) {
+              const subPromises = (object[field.key] as Array<object>).map(obj => this.removeDeclinedFieldsFromObject({ fields: fieldsOrModel, object: obj, mode, req, guardPreCache }))
+              return Promise.all(subPromises)
+            }
+            else {
+              return this.removeDeclinedFieldsFromObject({ fields: fieldsOrModel, object: object[field.key], mode, req, guardPreCache })
+            }
+          }
+        })
+
+      promises.push(promise)
+    }
+
+    await Promise.all(promises)
+    return object
+  }
+
+  /** Checks if there is minimal required access groups set for the model, of which every group is in the requests access groups */
+  hasEveryNeededAccessGroup(modelName: string, mode: AccessType, accessGroups: AccessGroup[]) {
+    return this.models[modelName].minimalRequriedAccessGroupSets![mode].some(as => as.every(ag => accessGroups.includes(ag)))
+  }
+
+  /** Calculates a Map of every access guard function and their results, that appear on the given fields */
+  async calculateGuardPreCache(req: Request, fields: RoboField[], mode: AccessType): Promise<GuardPreCache> {
+    const guardType = this.guardTypes[mode]
+
+    const guards = new Set<GuardFunction>()
+    for (const field of fields) {
+      for (const guard of field[guardType]) {
+        guards.add(guard)
+      }
+    }
+
+    const promises = [...guards].map(g => promisify(g.call(this, req)))
+    const res = await Promise.allSettled(promises)
+
+    const preCache = new Map<GuardFunction, boolean>()
+    for (const guard of guards) {
+      const result = res.shift()!
+      const guardValue = result.status == 'fulfilled' && result.value
+
+      preCache.set(guard, guardValue)
+    }
+
+    return preCache
+  }
+
+  /** Checks if the given field is readable/writeable with the request */
+  async isFieldDeclined({ req, field, mode, checkGroupAccess = true, guardPreCache = null }: {
+    req: Request
+    field: RoboField<AccessGroup>
+    mode: AccessType
+    checkGroupAccess: boolean
+    guardPreCache: null | GuardPreCache
+  }) {
+    const shouldCheckAccess = mode == 'read' ? req.checkReadAccess : req.checkWriteAccess
+    if (!shouldCheckAccess)
+      return false
+
+    if (checkGroupAccess) {
+      const groupType = this.groupTypes[mode]
+      if (!this.hasGroupAccess(field[groupType], req.accessGroups as AccessGroup[]))
+        return true
+    }
+
+    return this.isFieldDecliendByGuards(req, field, mode, guardPreCache)
+  }
+
+  /** Checks if the field is declined by the guard functions defined on it. */
+  async isFieldDecliendByGuards(
+    req: Request,
+    field: RoboField<AccessGroup>,
+    mode: AccessType,
+    guardPreCache: null | GuardPreCache = null
+  ): Promise<boolean> {
+    const guardType = this.guardTypes[mode]
+    if (!field[guardType].length)
+      return false
+
+    const promises = field[guardType].map(async (guard) => {
+      if (guardPreCache && guardPreCache.has(guard))
+        return guardPreCache.get(guard)!
+      else
+        return promisify(guard.call(this, req))
+    })
+
+    return Promise.all(promises)
+      .then(res => res.some(r => !r))
+      .catch(() => true)
+  }
+
+  /** Generates all the routes of robogo and returns the express router. */
+  generateRoutes() {
+    Router.use((req, res, next) => {
+      if (req.accessGroups === undefined)
+        req.accessGroups = []
+
+      if (req.checkReadAccess === undefined)
+        req.checkReadAccess = this.checkAccess
+
+      if (req.checkWriteAccess === undefined)
+        req.checkWriteAccess = this.checkAccess
+
+      next()
+    })
+
+    // CREATE routes
+    Router.post('/create/:model', (req, res) => {
+      this.CRUDSRoute({
+        operation: 'C',
+        req,
+        res,
+        mainPart: async (req, res) => {
+          if (req.checkWriteAccess)
+            await this.removeDeclinedFieldsFromObject({ fields: req.params.model, object: req.body, mode: 'write', req })
+  
+          const Model = this.mongooseConnection.model(req.params.model)
+          const ModelInstance = new Model(req.body)
+          return ModelInstance.save()
+        },
+        responsePart: async (req, res, result) => {
+          result = result.toObject() // this is needed, because mongoose returns an immutable object by default
+  
+          if (req.checkReadAccess)
+            await this.removeDeclinedFieldsFromObject({ fields: req.params.model, object: result, mode: 'read', req })
+  
+          res.send(result)
+        },
+      })
+    })
+    // ----------------
+
+    // READ routes
+    // these routes will use "lean" so that results are not immutable
+    Router.get('/read/:model', (req, res) => {
+      async function mainPart(req, res) {
+        const filter = await this.processFilter(req)
+        const sort = await this.processSort(req)
+
+        return this.MongooseConnection.model(req.params.model)
+          .find(filter, req.query.projection)
+          .sort(sort)
+          .skip(Number(req.query.skip) || 0)
+          .limit(Number(req.query.limit) || null)
+          .lean({ autopopulate: true, virtuals: true, getters: true })
+      }
+
+      async function responsePart(req, res, results) {
+        if (req.checkReadAccess)
+          await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
+
+        res.send(results)
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'R')
+    })
+
+    Router.get('/get/:model/:id', (req, res) => {
+      async function mainPart(req, res) {
+        return this.MongooseConnection.model(req.params.model)
+          .findOne({ _id: req.params.id }, req.query.projection)
+          .lean({ autopopulate: true, virtuals: true, getters: true })
+      }
+
+      async function responsePart(req, res, result) {
+        if (req.checkReadAccess)
+          await this.removeDeclinedFieldsFromObject({ fields: req.params.model, object: result, mode: 'read', req })
+
+        res.send(result)
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'R')
+    })
+
+    Router.get('/search/:model', (req, res) => {
+      async function mainPart(req, res) {
+        const filter = await this.processFilter(req)
+
+        return this.MongooseConnection.model(req.params.model)
+          .find(filter, req.query.projection)
+          .lean({ autopopulate: true, virtuals: true, getters: true })
+      }
+
+      async function responsePart(req, res, results) {
+        if (req.checkReadAccess)
+          await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
+
+        if (!req.query.term)
+          return res.send(results)
+
+        if (!req.query.threshold)
+          req.query.threshold = 0.4
+
+        if (!req.query.keys || req.query.keys.length == 0) { // if keys were not given, we search in all keys
+          let schema = this.DecycledSchemas[req.params.model]
+
+          if (req.checkReadAccess)
+            schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
+
+          req.query.keys = this.GetSearchKeys(schema, req.query.depth)
+        }
+
+        const fuse = new Fuse(results, {
+          includeScore: false,
+          keys: req.query.keys,
+          threshold: req.query.threshold,
+        })
+
+        const matched = fuse.search(req.query.term).map(r => r.item) // fuse.js's results include some other things, then the documents so we need to get them
+        res.send(matched)
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'R')
+    })
+    // ----------------
+
+    // UPDATE routes
+    Router.patch('/update/:model', (req, res) => {
+      async function mainPart(req, res) {
+        if (req.checkWriteAccess)
+          await this.removeDeclinedFieldsFromObject({ fields: req.params.model, object: req.body, mode: 'write', req })
+
+        return this.MongooseConnection.model(req.params.model)
+          .updateOne({ _id: req.body._id }, req.body)
+      }
+
+      async function responsePart(req, res, result) {
+        res.send(result)
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'U')
+    })
+    // ----------------
+
+    // DELETE routes
+    Router.delete('/delete/:model/:id', (req, res) => {
+      async function mainPart() {
+        const accesses = await this.getAccesses(req.params.model, req)
+
+        if (!accesses.model.write || Object.values(accesses.fields).some(({ write }) => !write))
+          return Promise.reject('FORBIDDEN')
+
+        return this.MongooseConnection.model(req.params.model)
+          .deleteOne({ _id: req.params.id })
+      }
+
+      async function responsePart(req, res, result) {
+        res.send(result)
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'D')
+    })
+    // ----------------
+
+    // SERVICE routes
+    Router.post('/runner/:service/:fun', (req, res) => {
+      this.ServiceRoute(req, res, 'body')
+    })
+
+    Router.get('/getter/:service/:fun', (req, res) => {
+      this.ServiceRoute(req, res, 'query')
+    })
+    // ----------------
+
+    // FILE routes
+    if (this.fileDir) {
+      Router.use(
+        `${this.serveStaticPath}`,
+        (req, res, next) => {
+          if (!this.fileReadMiddleware)
+            return next()
+
+          promisify(this.fileReadMiddleware(req))
+            .then(() => next())
+            .catch(reason => res.status(403).send(reason))
+        },
+        express.static(path.resolve(__dirname, this.fileDir), { maxAge: this.maxFileCacheAge }),
+      )
+      Router.use(`${this.serveStaticPath}`, (req, res) => res.status(404).send('NOT FOUND')) // If a file is not found in FileDir, send back 404 NOT FOUND
+
+      Router.post(
+        '/fileupload',
+        (req, res, next) => {
+          if (!this.fileUploadMiddleware)
+            return next()
+
+          promisify(this.fileUploadMiddleware(req))
+            .then(() => next())
+            .catch(reason => res.status(403).send(reason))
+        },
+        this.upload.single('file'),
+        (req, res) => {
+          if (req.file.mimetype.startsWith('image'))
+            return this.handleImageUpload(req, res)
+
+          const multerPath = req.file.path
+          const type = req.file.mimetype
+          const extension = req.file.originalname.split('.').pop()
+          const filePath = `${req.file.filename}.${extension}` // the file will be saved with the extension attached
+
+          fs.renameSync(multerPath, `${multerPath}.${extension}`)
+
+          const fileData = {
+            name: req.file.originalname,
+            path: filePath,
+            size: req.file.size,
+            extension,
+            type,
+          }
+
+          // we create the RoboFile document with the properties of the file
+          RoboFileModel.create(fileData, (err, file) => {
+            if (err)
+              res.status(500).send(err)
+            else res.send(file)
+          })
+        },
+      )
+
+      Router.post(
+        '/fileclone/:id',
+        (req, res, next) => {
+          if (!this.fileUploadMiddleware)
+            return next()
+
+          promisify(this.fileUploadMiddleware(req))
+            .then(() => next())
+            .catch(reason => res.status(403).send(reason))
+        },
+        (req, res) => {
+          RoboFileModel.findOne({ _id: req.params.id }).lean()
+            .then((roboFile) => {
+              const realPath = path.resolve(this.fileDir, roboFile.path)
+              if (!realPath.startsWith(this.fileDir))
+                return Promise.reject('INVALID PATH')
+
+              const copyRealPath = realPath.replace('.', '_copy.')
+              if (fs.existsSync(realPath))
+                fs.copyFileSync(realPath, copyRealPath)
+
+              if (roboFile.thumbnailPath) {
+                const thumbnailPath = path.resolve(this.fileDir, roboFile.thumbnailPath)
+                if (!thumbnailPath.startsWith(this.fileDir))
+                  return Promise.reject('INVALID PATH')
+
+                const copyThumbnailPath = thumbnailPath.replace('.', '_copy.')
+                if (fs.existsSync(thumbnailPath))
+                  fs.copyFileSync(thumbnailPath, copyThumbnailPath)
+              }
+
+              delete roboFile._id
+              roboFile.path = roboFile.path.replace('.', '_copy.')
+              roboFile.thumbnailPath = roboFile.thumbnailPath.replace('.', '_copy.')
+
+              return RoboFileModel.create(roboFile)
+            })
+            .then(file => res.send(file))
+            .catch(err => res.status(500).send(err))
+        },
+      )
+
+      Router.delete(
+        '/filedelete/:id',
+        (req, res, next) => {
+          if (!this.fileDeleteMiddleware)
+            return next()
+
+          promisify(this.fileDeleteMiddleware(req))
+            .then(() => next())
+            .catch(reason => res.status(403).send(reason))
+        },
+        (req, res) => {
+          RoboFileModel.findOne({ _id: req.params.id })
+            .then((file) => {
+              if (!file)
+                return Promise.reject('Unkown file')
+
+              // we remove both the file and thumbnail if they exists
+              const realPath = path.resolve(this.fileDir, file.path)
+              if (!realPath.startsWith(this.fileDir))
+                return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
+              if (fs.existsSync(realPath))
+                fs.unlinkSync(realPath)
+
+              if (file.thumbnailPath) {
+                const thumbnailPath = path.resolve(this.fileDir, file.thumbnailPath)
+                if (!thumbnailPath.startsWith(this.fileDir))
+                  return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
+                if (fs.existsSync(thumbnailPath))
+                  fs.unlinkSync(thumbnailPath)
+              }
+
+              // we delete the RoboFile document
+              return RoboFileModel.deleteOne({ _id: file._id })
+            })
+            .then(() => res.send())
+            .catch(err => res.status(400).send(err))
+        },
+      )
+    }
+    // --------------
+
+    // SPECIAL routes
+    Router.get('/model/:model', (req, res) => {
+      async function mainPart(req, res) {
+        return await this.hasModelAccess(req.params.model, 'read', req)
+      }
+
+      async function responsePart(req, res, hasAccess) {
+        if (!req.checkReadAccess || hasAccess)
+          res.send({ ...this.Models[req.params.model], model: req.params.model })
+        else
+          res.status(403).send()
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+    })
+
+    Router.get('/model', (req, res) => {
+      const promises = []
+      for (const modelName in this.models) {
+        const promise = this.hasModelAccess(modelName, 'read', req)
+        promises.push(promise)
+      }
+
+      Promise.all(promises)
+        .then((results) => {
+          const models = []
+
+          for (const modelName in this.models) {
+            if (req.checkReadAccess && !results.shift())
+              continue
+
+            models.push({ ...this.models[modelName], model: modelName })
+          }
+
+          res.send(models)
+        })
+    })
+
+    Router.get('/schema/:model', (req, res) => {
+      async function mainPart(req, res) {
+        return this.DecycledSchemas[req.params.model]
+      }
+
+      async function responsePart(req, res, result) {
+        if (req.checkReadAccess)
+          result = await this.RemoveDeclinedFieldsFromSchema(result, req, 'read')
+
+        res.send(result)
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+    })
+
+    Router.get('/fields/:model', (req, res) => {
+      async function mainPart(req, res) {
+        let schema = this.DecycledSchemas[req.params.model]
+
+        if (req.checkReadAccess)
+          schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
+
+        const fields = this.GetFields(schema, req.query.depth)
+        return fields
+      }
+
+      async function responsePart(req, res, result) {
+        res.send(result)
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+    })
+
+    Router.get('/count/:model', (req, res) => {
+      async function mainPart(req, res) {
+        const filter = await this.processFilter(req)
+
+        return this.MongooseConnection.model(req.params.model)
+          .countDocuments(filter)
+      }
+
+      async function responsePart(req, res, result) {
+        res.send(String(result))
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+    })
+
+    Router.get('/searchkeys/:model', (req, res) => {
+      async function mainPart(req, res) {
+        let schema = this.DecycledSchemas[req.params.model]
+
+        if (req.checkReadAccess)
+          schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
+
+        return this.GetSearchKeys(schema, req.query.depth)
+      }
+
+      async function responsePart(req, res, result) {
+        res.send(result)
+      }
+
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+    })
+
+    Router.get('/accessesGroups', (req, res) => {
+      const result = Object.keys(this.accessGroups)
+      res.send(result)
+    })
+
+    Router.get('/accesses/:model', async (req, res) => {
+      try {
+        const accesses = await this.getAccesses(req.params.model, req)
+        res.send(accesses)
+      }
+      catch (err) {
+        res.status(500).send()
+      }
+    })
+
+    return Router
+  }
 }
 
-// function Promisify(value) {
-//   if (value instanceof Promise)
-//     return value
-//   return Promise.resolve(value)
-// }
+function promisify<T>(value: T): Promise<Awaited<T>>  {
+  if (value instanceof Promise)
+    return value
+  else
+    return Promise.resolve(value)
+}

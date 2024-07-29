@@ -9,6 +9,8 @@ const RoboFileSchema = new mongoose.Schema({
   isImage: { type: Boolean, name: 'Is image?', description: 'Indicates whether the saved file is an image or not', default: false },
   thumbnailPath: { type: String, name: 'Thumbnail path', description: 'Path of the saved thumbnail', default: null },
   uploadDate: { type: Date, name: 'Upload date', description: 'The date when the file was uploaded', default: () => new Date() },
+
+  test: {type: [String], name: 'fwefwef'}
 }, { selectPopulatedPaths: false })
 
 export default mongoose.model('RoboFile', RoboFileSchema)
