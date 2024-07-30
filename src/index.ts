@@ -1604,18 +1604,18 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
     // SPECIAL routes
     Router.get('/model/:model', (req, res) => {
-      async function mainPart(req, res) {
-        return await this.hasModelAccess(req.params.model, 'read', req)
-      }
-
-      async function responsePart(req, res, hasAccess) {
-        if (!req.checkReadAccess || hasAccess)
-          res.send({ ...this.Models[req.params.model], model: req.params.model })
-        else
-          res.status(403).send()
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+      this.CRUDSRoute({
+        req,
+        res,
+        operation: 'S',
+        mainPart: () => this.hasModelAccess(req.params.model, 'read', req),
+        responsePart: async hasAccess => {
+          if (!req.checkReadAccess || hasAccess)
+            res.send({ ...this.models[req.params.model], model: req.params.model })
+          else
+            res.status(403).send()
+        }
+      })
     })
 
     Router.get('/model', (req, res) => {
@@ -1641,68 +1641,55 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     })
 
     Router.get('/schema/:model', (req, res) => {
-      async function mainPart(req, res) {
-        return this.DecycledSchemas[req.params.model]
-      }
-
-      async function responsePart(req, res, result) {
-        if (req.checkReadAccess)
-          result = await this.RemoveDeclinedFieldsFromSchema(result, req, 'read')
-
-        res.send(result)
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+      this.CRUDSRoute({
+        req,
+        res,
+        operation: 'S',
+        mainPart: async () => this.decycledSchemas[req.params.model],
+        responsePart: async result => {
+          if (req.checkReadAccess)
+            result = await this.removeDeclinedFieldsFromSchema(result, req, 'read')
+  
+          res.send(result)
+        },
+      })
     })
 
     Router.get('/fields/:model', (req, res) => {
-      async function mainPart(req, res) {
-        let schema = this.DecycledSchemas[req.params.model]
-
-        if (req.checkReadAccess)
-          schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
-
-        const fields = this.GetFields(schema, req.query.depth)
-        return fields
-      }
-
-      async function responsePart(req, res, result) {
-        res.send(result)
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+      this.CRUDSRoute({
+        req,
+        res,
+        operation: 'S',
+        mainPart: async () => {
+          let schema = this.decycledSchemas[req.params.model]
+  
+          if (req.checkReadAccess)
+            schema = await this.removeDeclinedFieldsFromSchema(schema, req, 'read')
+  
+          const fields = this.getFields(schema, req.query.depth)
+          return fields
+        },
+        responsePart: async result => {
+          res.send(result)
+        },
+      })
     })
 
     Router.get('/count/:model', (req, res) => {
-      async function mainPart(req, res) {
-        const filter = await this.processFilter(req)
-
-        return this.MongooseConnection.model(req.params.model)
-          .countDocuments(filter)
-      }
-
-      async function responsePart(req, res, result) {
-        res.send(String(result))
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
-    })
-
-    Router.get('/searchkeys/:model', (req, res) => {
-      async function mainPart(req, res) {
-        let schema = this.DecycledSchemas[req.params.model]
-
-        if (req.checkReadAccess)
-          schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
-
-        return this.GetSearchKeys(schema, req.query.depth)
-      }
-
-      async function responsePart(req, res, result) {
-        res.send(result)
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+      this.CRUDSRoute({
+        req,
+        res,
+        operation: 'S',
+        mainPart: async () => {
+          const filter = await this.processFilter(req)
+  
+          return this.mongooseConnection.model(req.params.model)
+            .countDocuments(filter)
+        },
+        responsePart: async result => {
+          res.send(String(result))
+        },
+      })
     })
 
     Router.get('/accessesGroups', (req, res) => {
