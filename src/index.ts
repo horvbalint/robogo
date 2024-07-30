@@ -10,7 +10,7 @@ import { glob } from 'glob'
 import RoboFileModel from './schemas/roboFile'
 import Logger from './utils/logger'
 import MinimalSetCollection from './utils/minimalSetCollection'
-import type { AccessType, FileMiddlewareFunction, GuardFunction, GuardPreCache, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, NestedArray, OperationType, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
+import type { AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardPreCache, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, NestedArray, OperationType, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
 import { model, mongo, Mongoose, ObjectId } from 'mongoose'
 
 const Router = express.Router()
@@ -213,7 +213,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       readGuards: mongooseModel.schema.get('readGuards') || [],
       writeGuards: mongooseModel.schema.get('writeGuards') || [],
       defaultFilter: mongooseModel.schema.get('defaultFilter') || {},
-      defaultSort: this.objectifySortValue(mongooseModel.schema.get('defaultSort') || {}),
+      defaultSort: this.convertToSortObject(mongooseModel.schema.get('defaultSort') || {}),
     }
 
     for (const namespace of roboModel.namespaces) {
@@ -283,7 +283,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Constructs a sort object from the possible sort types (https://mongoosejs.com/docs/api/query.html#Query.prototype.sort()) */
-  objectifySortValue(sortValue: NonNullable<SortValue>): SortObject {
+  convertToSortObject(sortValue: SortValue): SortObject {
     // eg.: [['field1', -1], ['field2', 1]]
     if (Array.isArray(sortValue))
       return Object.fromEntries(sortValue)
@@ -837,29 +837,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   //   this.middlewares[modelName][operation][timing] = middlewareFunction
   // }
-
-  // /**
-  //  * Removes every field from an array of documents, which need an access group not included in then given parameter.
-  //  * @param {string | Array} fields
-  //  * @param {Array} documents
-  //  * @param {string} mode
-  //  * @param {object} req
-  //  * @param {string} [DBString]
-  //  */
-  // async RemoveDeclinedFields(fields, documents, mode, req, DBString = this.baseDBString) {
-  //   let model = null
-  //   if (typeof fields == 'string') { // if model name was given, then we get the models fields
-  //     model = fields
-  //     fields = this.schemas[DBString][model]
-  //   }
-
-  //   const guardPreCache = await this.calculateGuardPreCache(req, fields, mode)
-  //   const promises = documents.map(doc => this.removeDeclinedFieldsFromObject({ fields: model || fields, object: doc, mode, req, guardPreCache }))
-
-  //   return Promise.all(promises)
-  // }
-
-
   
   // async RemoveDeclinedFieldsFromSchema(fields, req, mode) {
   //   let model = null
@@ -1022,34 +999,13 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   //     .catch(error => res.status(500).send(error))
   // }
 
-  // async processSort(req) {
-  //   const sortValue = JSON.parse(req.query.sort || '{}')
-  //   const sortObject = this.ObjectifySortValue(sortValue)
-
-  //   const sort = { ...this.models[req.params.model].defaultSort, ...sortObject }
-
-  //   const promises = []
-  //   for (const path in sort) {
-  //     const promise = this.isFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
-  //       .then((isDeclined) => {
-  //         if (isDeclined)
-  //           delete sort[path]
-  //       })
-
-  //     promises.push(promise)
-  //   }
-  //   await Promise.all(promises)
-
-  //   return sort
-  // }
-
   /** A helper function, that is a template for the CRUDS category routes. */
-  async CRUDSRoute<T>({operation, req, res, mainPart, responsePart}: {
-    operation: OperationType
+  async CRUDSRoute<T>({req, res, operation, mainPart, responsePart}: {
     req: Request,
     res: Response,
-    mainPart: (req: Request, res: Response) => Promise<T>,
-    responsePart: (req: Request, res: Response, result: T) => Promise<void>,
+    operation: OperationType
+    mainPart: () => Promise<T>,
+    responsePart: (result: T) => Promise<void>,
   }) {
     // if the model is unkown send an error
     if (!this.schemas[req.params.model]) {
@@ -1069,12 +1025,12 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       if (!hasAccess)
         return res.status(403).send()
 
-      const result = await mainPart.call(this, req, res)
+      const result = await mainPart.call(this)
 
       await middlewareFunctions.after.call(this, req, res, result)
         .catch(err => {throw new MiddlewareError('after', err)})
 
-      await responsePart.call(this, req, res, result)
+      await responsePart.call(this, result)
     }
     catch(err) {
       if(err instanceof MiddlewareError) {
@@ -1114,7 +1070,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   /** Removes declined fields from an object. */
   async removeDeclinedFieldsFromObject({object, mode, req, guardPreCache, ...params}: { 
-    object: Partial<MongooseDocument>
+    object: Partial<MongooseDocument> | null
     mode: AccessType
     req: Request
     guardPreCache?: GuardPreCache
@@ -1123,7 +1079,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   } | {
     modelName: string
   })): Promise<void> {
-    if (!object) // TODO: is this needed?
+    if (!object)
       return
 
     const fields = 'fields' in params ? params.fields : this.schemas[params.modelName]
@@ -1209,8 +1165,8 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     req: Request
     field: RoboField<AccessGroup>
     mode: AccessType
-    checkGroupAccess: boolean
-    guardPreCache: null | GuardPreCache
+    checkGroupAccess?: boolean
+    guardPreCache?: null | GuardPreCache
   }): Promise<boolean> {
     const shouldCheckAccess = mode == 'read' ? req.checkReadAccess : req.checkWriteAccess
     if (!shouldCheckAccess)
@@ -1248,8 +1204,25 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       .catch(() => true)
   }
 
+  /** Removes every field that are not readable/writeable with the provided request in every document. */
+  async removeDeclinedFields({documents, mode, req, ...params}: {
+    documents: MongooseDocument[],
+    mode: AccessType,
+    req: Request
+  } & ({
+    fields: RoboField<AccessGroup>[]
+  } | {
+    modelName: string
+  })) {
+    const fields = 'fields' in params ? params.fields : this.schemas[params.modelName]
+    const guardPreCache = await this.calculateGuardPreCache(req, fields, mode)
+
+    const promises = documents.map(doc => this.removeDeclinedFieldsFromObject({ ...params, object: doc, mode, req, guardPreCache }))
+    await Promise.all(promises)
+  }
+
   async processFilter(req: Request) {
-    const originalFilter = JSON.parse(req.query.filter as string || '{}')
+    const originalFilter: FilterObject = JSON.parse(req.query.filter as string || '{}')
     const extendedFilter = await this.extendFilterWithDefaults(req.params.model, originalFilter)
     const checkedFilter = await this.removeDeclinedFieldsFromFilter(req, extendedFilter)
 
@@ -1257,13 +1230,13 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Extends the given filter object with the given models default filters (if any) */
-  async extendFilterWithDefaults(modelName: string, filter: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async extendFilterWithDefaults(modelName: string, filter: FilterObject): Promise<FilterObject> {
     const defaultFilter = this.models[modelName].defaultFilter
 
     if (!Object.keys(defaultFilter).length)
       return { ...filter }
 
-    const defaultFilterCopy = JSON.parse(JSON.stringify(defaultFilter))
+    const defaultFilterCopy: FilterObject = JSON.parse(JSON.stringify(defaultFilter))
     await this.visitFilter({
       filter,
       conditionVisitor: path => delete defaultFilterCopy[path],
@@ -1272,32 +1245,36 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     return { ...defaultFilterCopy, ...filter }
   }
 
-  async removeDeclinedFieldsFromFilter(req: Request, filter: Record<string, unknown>) {
+  /** Removes the fields from a filter which can't be read/written with the provided request */
+  async removeDeclinedFieldsFromFilter(req: Request, filter: FilterObject) {
     return await this.visitFilter({
       filter,
-      groupVisitor: (results) => {
-        const conditions = results.filter(result => Object.keys(result).length)
-        if (!conditions.length)
-          return Promise.reject()
-
-        return conditions
-      },
       conditionVisitor: async (path, value) => {
         const isDeclined = await this.isFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
+
         if (isDeclined)
           return Promise.reject()
+        else
+          return value
+      },
+      groupVisitor: (results) => {
+        const conditions = results.filter(result => Object.keys(result).length)
 
-        return value
+        if (!conditions.length)
+          return Promise.reject()
+        else
+          return conditions
       },
     })
   }
 
-  async visitFilter({ filter, groupVisitor = () => {}, conditionVisitor = (_path, value) => value }: {
-    filter: Record<string, unknown>
-    groupVisitor: () => void
-    conditionVisitor: (path: string, value: unknown) => unknown
-  }) {
-    const result = {}
+  /** Visits every condition and group in a filter object. It can also be used to construct a new filter object. */
+  async visitFilter({ filter, groupVisitor = conditions => conditions, conditionVisitor = (_path, value) => value }: {
+    filter: FilterObject
+    conditionVisitor?: (path: string, value: unknown) => MaybePromise<unknown>
+    groupVisitor?: (conditions: FilterObject[]) => MaybePromise<FilterObject[]>
+  }): Promise<FilterObject> {
+    const result: FilterObject = {}
     const promises = []
 
     for (const outerKey in filter) {
@@ -1307,7 +1284,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       }
 
       if (outerKey == '$and' || outerKey == '$or') {
-        const conditionPromises = filter[outerKey].map(condition => this.visitFilter({ filter: condition, groupVisitor, conditionVisitor }))
+        const conditionPromises = filter[outerKey]!.map(condition => this.visitFilter({ filter: condition, groupVisitor, conditionVisitor }))
         const conditions = await Promise.all(conditionPromises)
 
         const promise = promisify(groupVisitor(conditions))
@@ -1325,6 +1302,28 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
     await Promise.allSettled(promises)
     return result
+  }
+
+  /** Adds the default sorts to the requests sort param (if any) and removes those fields from the sort object, that are not readable by the provided request */
+  async processSort(req: Request) {
+    const sortValue: SortValue = JSON.parse(req.query.sort as string || '{}')
+    const sortObject = this.convertToSortObject(sortValue)
+
+    const sort = { ...this.models[req.params.model].defaultSort, ...sortObject }
+
+    const promises = []
+    for (const path in sort) {
+      const promise = this.isFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
+        .then((isDeclined) => {
+          if (isDeclined)
+            delete sort[path]
+        })
+
+      promises.push(promise)
+    }
+    await Promise.all(promises)
+
+    return sort
   }
 
   /** Generates all the routes of robogo and returns the express router. */
@@ -1345,16 +1344,16 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     // CREATE routes
     Router.post('/create/:model', (req, res) => {
       this.CRUDSRoute({
-        operation: 'C',
         req,
         res,
-        mainPart: async req => {
+        operation: 'C',
+        mainPart: async () => {
           if (req.checkWriteAccess)
             await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: req.body, mode: 'write', req })
   
           return this.mongooseConnection.model(req.params.model).create(req.body)
         },
-        responsePart: async (req, res, result) => {
+        responsePart: async result => {
           if (req.checkReadAccess)
             await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: result.toObject(), mode: 'read', req }) // .toObject() is needed, because create returns an immutable object by default 
   
@@ -1368,23 +1367,25 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     // these routes will use "lean" so that results are not immutable
     Router.get('/read/:model', (req, res) => {
       this.CRUDSRoute({
-        operation: 'R',
         req,
         res,
-        mainPart: async req => {
-          const filter = await this.processFilter(req)
-          const sort = await this.processSort(req)
+        operation: 'R',
+        mainPart: async () => {
+          const [filter, sort] = await Promise.all([
+              this.processFilter(req),
+              this.processSort(req)
+          ])
   
           return this.mongooseConnection.model(req.params.model)
             .find(filter, req.query.projection)
             .sort(sort)
             .skip(Number(req.query.skip) || 0)
-            .limit(Number(req.query.limit) || null)
+            .limit(Number(req.query.limit) || Infinity)
             .lean({ autopopulate: true, virtuals: true, getters: true })
         },
-        responsePart: async (req, res, result) => {
+        responsePart: async results => {
           if (req.checkReadAccess)
-            await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
+            await this.removeDeclinedFields({modelName: req.params.model, documents: results as MongooseDocument[], mode: 'read', req})
   
           res.send(results)
         }
@@ -1392,99 +1393,64 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     })
 
     Router.get('/get/:model/:id', (req, res) => {
-      async function mainPart(req, res) {
-        return this.MongooseConnection.model(req.params.model)
-          .findOne({ _id: req.params.id }, req.query.projection)
-          .lean({ autopopulate: true, virtuals: true, getters: true })
-      }
-
-      async function responsePart(req, res, result) {
-        if (req.checkReadAccess)
-          await this.removeDeclinedFieldsFromObject({ fields: req.params.model, object: result, mode: 'read', req })
-
-        res.send(result)
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'R')
-    })
-
-    Router.get('/search/:model', (req, res) => {
-      async function mainPart(req, res) {
-        const filter = await this.processFilter(req)
-
-        return this.MongooseConnection.model(req.params.model)
-          .find(filter, req.query.projection)
-          .lean({ autopopulate: true, virtuals: true, getters: true })
-      }
-
-      async function responsePart(req, res, results) {
-        if (req.checkReadAccess)
-          await this.RemoveDeclinedFields(req.params.model, results, 'read', req)
-
-        if (!req.query.term)
-          return res.send(results)
-
-        if (!req.query.threshold)
-          req.query.threshold = 0.4
-
-        if (!req.query.keys || req.query.keys.length == 0) { // if keys were not given, we search in all keys
-          let schema = this.DecycledSchemas[req.params.model]
-
+      this.CRUDSRoute({
+        req,
+        res,
+        operation: 'R',
+        mainPart: async () => {
+          return this.mongooseConnection.model(req.params.model)
+            .findOne({ _id: req.params.id }, req.query.projection)
+            .lean({ autopopulate: true, virtuals: true, getters: true })
+        },
+        responsePart: async result => {
           if (req.checkReadAccess)
-            schema = await this.RemoveDeclinedFieldsFromSchema(schema, req, 'read')
-
-          req.query.keys = this.GetSearchKeys(schema, req.query.depth)
+            await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: result as MongooseDocument | null, mode: 'read', req })
+  
+          res.send(result)
         }
-
-        const fuse = new Fuse(results, {
-          includeScore: false,
-          keys: req.query.keys,
-          threshold: req.query.threshold,
-        })
-
-        const matched = fuse.search(req.query.term).map(r => r.item) // fuse.js's results include some other things, then the documents so we need to get them
-        res.send(matched)
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'R')
+      })
     })
     // ----------------
 
     // UPDATE routes
     Router.patch('/update/:model', (req, res) => {
-      async function mainPart(req, res) {
-        if (req.checkWriteAccess)
-          await this.removeDeclinedFieldsFromObject({ fields: req.params.model, object: req.body, mode: 'write', req })
-
-        return this.MongooseConnection.model(req.params.model)
-          .updateOne({ _id: req.body._id }, req.body)
-      }
-
-      async function responsePart(req, res, result) {
-        res.send(result)
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'U')
+      this.CRUDSRoute({
+        req,
+        res,
+        operation: 'U',
+        mainPart: async () => {
+          if (req.checkWriteAccess)
+            await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: req.body, mode: 'write', req })
+  
+          return this.mongooseConnection.model(req.params.model)
+            .updateOne({ _id: req.body._id }, req.body)
+        },
+        responsePart: async result => {
+          res.send(result)
+        }
+      })
     })
     // ----------------
 
     // DELETE routes
     Router.delete('/delete/:model/:id', (req, res) => {
-      async function mainPart() {
-        const accesses = await this.getAccesses(req.params.model, req)
+      this.CRUDSRoute({
+        req,
+        res,
+        operation: 'D',
+        mainPart: async () => {
+          const accesses = await this.getAccesses(req.params.model, req)
 
-        if (!accesses.model.write || Object.values(accesses.fields).some(({ write }) => !write))
-          return Promise.reject('FORBIDDEN')
-
-        return this.MongooseConnection.model(req.params.model)
-          .deleteOne({ _id: req.params.id })
-      }
-
-      async function responsePart(req, res, result) {
-        res.send(result)
-      }
-
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'D')
+          if (!accesses.model.write || Object.values(accesses.fields).some(({ write }) => !write))
+            return Promise.reject('FORBIDDEN')
+  
+          return this.mongooseConnection.model(req.params.model)
+            .deleteOne({ _id: req.params.id })
+        },
+        responsePart: async result => {
+          res.send(result)
+        }
+      })
     })
     // ----------------
 

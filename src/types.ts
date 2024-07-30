@@ -13,11 +13,16 @@ export type OperationType = 'C' | 'R' | 'U' | 'D' | 'S'
 export type MiddlewareBeforeFunction = (req: Request, res: Response) => Promise<void>
 export type MiddlewareAfterFunction = (req: Request, res: Response, result: unknown) => Promise<void>
 export interface NestedArray<T> extends Array<NestedArray<T> | T> {}
-export type SortValue = Parameters<mongoose.Query<unknown, unknown>['sort']>[0]
+export type SortValue = NonNullable<Parameters<mongoose.Query<unknown, unknown>['sort']>[0]>
 export type SortObject = {
   [key: string]: mongoose.SortOrder | {
       $meta: any;
   }
+}
+export type FilterObject = {
+  $and?: FilterObject[]
+  $or?: FilterObject[]
+  [key: string]: unknown
 }
 export interface MongooseDocument {
   _id: ObjectId
@@ -82,7 +87,7 @@ export interface Model<Namespace extends string, AccessGroup extends string> ext
   /** A list of guard functions to be used for 'write' like operations */
   writeGuards: GuardFunction[]
   /** A filter object, where if no filter was provided in the request for the keys, then it will be supplied from this */
-  defaultFilter: Record<string, unknown>
+  defaultFilter: FilterObject
   /** A sort object, where if no sort was provided in the request for the keys, then it will be supplied from this */
-  defaultSort: Record<string, unknown>
+  defaultSort: SortObject
 }
