@@ -91,3 +91,15 @@ export interface Model<Namespace extends string, AccessGroup extends string> ext
   /** A sort object, where if no sort was provided in the request for the keys, then it will be supplied from this */
   defaultSort: SortObject
 }
+
+export interface Accesses {
+  model: {
+    read: boolean
+    write: boolean
+    writeAllRequired: boolean
+  }
+  fields: Record<string, {
+    read: boolean
+    write: boolean
+  }>
+}

@@ -10,8 +10,9 @@ import { glob } from 'glob'
 import RoboFileModel from './schemas/roboFile'
 import Logger from './utils/logger'
 import MinimalSetCollection from './utils/minimalSetCollection'
-import type { AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardPreCache, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, NestedArray, OperationType, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
+import type { Accesses, AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardPreCache, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, NestedArray, OperationType, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
 import { model, mongo, Mongoose, ObjectId } from 'mongoose'
+import e from 'express'
 
 const Router = express.Router()
 
@@ -880,103 +881,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   //     .then(res => res.filter(r => r.status == 'fulfilled').map(r => r.value))
   // }
 
-  // getAccesses(model, req) {
-  //   const accesses = {}
-  //   const schema = this.schemas[this.baseDBString][model]
-
-  //   // first we check for read and write accesses on the model itself
-  //   return Promise.all([
-  //     this.hasModelAccess(model, 'read', req),
-  //     this.hasModelAccess(model, 'write', req),
-  //   ])
-  //     .then(([canReadModel, canWriteModel]) => {
-  //       accesses.model = {
-  //         read: canReadModel,
-  //         write: canWriteModel,
-  //       }
-
-  //       // then we go and check each field
-  //       const fieldPromises = []
-  //       for (const mode of ['read', 'write']) {
-  //         let promise = Promise.resolve([])
-
-  //         if (accesses.model[mode]) {
-  //           const checkGroupAccess = !this.hasEveryNeededAccessGroup(model, mode, req.accessGroups)
-  //           promise = this.getFieldAccesses({ fields: schema, mode, req, checkGroupAccess })
-  //         }
-
-  //         fieldPromises.push(promise)
-  //       }
-
-  //       return Promise.all(fieldPromises)
-  //     })
-  //     .then(([[canReadAllRequired, read], [canWriteAllRequired, write]]) => {
-  //       accesses.fields = {}
-
-  //       // we merge the read and write accesses into one object
-  //       const fieldAccesses = { read, write }
-  //       for (const mode of ['read', 'write']) {
-  //         for (const field in fieldAccesses[mode]) {
-  //           if (!accesses.fields[field])
-  //             accesses.fields[field] = {}
-
-  //           accesses.fields[field][mode] = fieldAccesses[mode][field]
-  //         }
-  //       }
-
-  //       // once field access are collected, we remove those entries where there is neither read nor write access
-  //       for (const path in accesses.fields) {
-  //         const field = accesses.fields[path]
-  //         if (!field.write && !field.read)
-  //           delete accesses.fields[path]
-  //       }
-
-  //       accesses.model.writeAllRequired = accesses.model.write && canWriteAllRequired
-
-  //       return accesses
-  //     })
-  // }
-
-  // /**
-  //  * Retrieves field accesses based on specified parameters.
-  //  * @async
-  //  * @param {object} params - The parameters for retrieving field accesses.
-  //  * @param {Array} params.fields - The array of fields to retrieve accesses for.
-  //  * @param {string} params.mode - The mode specifying the retrieval behavior.
-  //  * @param {object} params.req - The request object associated with the operation.
-  //  * @param {boolean} [params.checkGroupAccess] - Flag indicating whether to check group access.
-  //  * @param {object} [params.accesses] - The object to store the retrieved accesses.
-  //  * @param {string} [params.prefix] - The prefix for field names.
-  //  * @param {Map?} [params.guardPreCache] - The pre-cache guard object.
-  //  * @returns {Promise} A Promise that resolves with the retrieved field accesses.
-  //  */
-  // async getFieldAccesses({ fields, mode, req, checkGroupAccess, accesses = {}, prefix = '', guardPreCache = null }) {
-  //   guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fields, mode)
-
-  //   const promises = fields.map(field => this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache }))
-  //   const results = await Promise.all(promises)
-
-  //   const subPromises = []
-  //   let trueForAllRequired = true
-  //   for (const field of fields) {
-  //     const absolutePath = prefix + field.key
-  //     accesses[absolutePath] = !results.shift()
-
-  //     if (field.required && !accesses[absolutePath])
-  //       trueForAllRequired = false
-
-  //     if (field.subfields && !field.ref && accesses[absolutePath]) {
-  //       const promise = this.getFieldAccesses({ fields: field.subfields, mode, req, checkGroupAccess, accesses, prefix: `${absolutePath}.`, guardPreCache })
-  //       subPromises.push(promise)
-  //     }
-  //   }
-
-  //   const res = await Promise.all(subPromises)
-  //   const trueForAllSubRequired = !res.some(([forAll]) => !forAll)
-
-  //   return [trueForAllRequired && trueForAllSubRequired, accesses]
-  // }
-
   // /**
   //  * A helper function, that is a template for Service routes.
   //  * @param {object} req
@@ -1324,6 +1228,94 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     await Promise.all(promises)
 
     return sort
+  }
+
+  async getAccesses(modelName: string, req: Request): Promise<Accesses> {
+    const schema = this.schemas[modelName]
+
+    // first we check for read and write accesses on the model itself
+    const [canReadModel, canWriteModel] = await Promise.all([
+      this.hasModelAccess(modelName, 'read', req),
+      this.hasModelAccess(modelName, 'write', req),
+    ])
+
+    const modelAccesses = {
+        read: canReadModel,
+        write: canWriteModel,
+    }
+
+    // then we go and check each field
+    const fieldPromises = []
+    for (const mode of ['read', 'write'] as const) {
+      if (!modelAccesses[mode]) {
+        fieldPromises.push(Promise.resolve(null))
+      }
+      else {
+        const checkGroupAccess = !this.hasEveryNeededAccessGroup(modelName, mode, req.accessGroups as AccessGroup[])
+        const promise = this.getFieldAccesses({ fields: schema, mode, req, checkGroupAccess })
+        fieldPromises.push(promise)
+      }
+    }
+
+    const [read, write] = await Promise.all(fieldPromises)
+    const fieldAccesses: Record<string, Partial<Accesses['fields'][string]>> = {}
+
+    // we merge the read and write accesses into one object
+    const accessResults = { read, write }
+    for (const mode of ['read', 'write'] as const) {
+      for (const field in accessResults[mode]) {
+        if (!fieldAccesses[field])
+          fieldAccesses[field] = {}
+
+        fieldAccesses[field][mode] = accessResults[mode][field]
+      }
+    }
+
+    const accesses = {
+      model: {
+        ...modelAccesses,
+        writeAllRequired: !Object.keys(fieldAccesses).some(path => this.pathSchemas[modelName][path].required && !fieldAccesses[path].write)
+      },
+      fields: fieldAccesses as Accesses['fields']
+    }
+
+    // once field access are collected, we remove those entries where there is neither read nor write access
+    for (const path in accesses.fields) {
+      const field = accesses.fields[path]
+      if (!field.write && !field.read)
+        delete accesses.fields[path]
+    }
+
+    return accesses
+  }
+
+  async getFieldAccesses({ fields, mode, req, checkGroupAccess, accesses = {}, prefix = '', guardPreCache = null }: {
+    fields: RoboField<AccessGroup>[]
+    mode: AccessType
+    req: Request
+    checkGroupAccess: boolean
+    accesses?: Record<string, boolean>
+    prefix?: string
+    guardPreCache?: GuardPreCache | null
+  }): Promise<Record<string, boolean>> {
+    guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fields, mode)
+
+    const promises = fields.map(field => this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache }))
+    const results = await Promise.all(promises)
+
+    const subPromises = []
+    for (const field of fields) {
+      const absolutePath = prefix + field.key
+      accesses[absolutePath] = !results.shift()
+
+      if (field.subfields && !field.ref && accesses[absolutePath]) {
+        const promise = this.getFieldAccesses({ fields: field.subfields, mode, req, checkGroupAccess, accesses, prefix: `${absolutePath}.`, guardPreCache })
+        subPromises.push(promise)
+      }
+    }
+
+    await Promise.all(subPromises)
+    return accesses
   }
 
   /** Generates all the routes of robogo and returns the express router. */
