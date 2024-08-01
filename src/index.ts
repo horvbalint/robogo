@@ -10,9 +10,7 @@ import { glob } from 'glob'
 import RoboFileModel from './schemas/roboFile'
 import Logger from './utils/logger'
 import MinimalSetCollection from './utils/minimalSetCollection'
-import type { Accesses, AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardPreCache, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, NestedArray, OperationType, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
-import { model, mongo, Mongoose, ObjectId } from 'mongoose'
-import e from 'express'
+import type { Accesses, AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, NestedArray, OperationType, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
 
 const Router = express.Router()
 
@@ -82,6 +80,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   public accessGroups: Record<AccessGroup, readonly Namespace[]>
   public operations: OperationType[] = ['C', 'R', 'U', 'D', 'S']
   public timings: MiddlewareTiming[] = ['after', 'before']
+  public accessTypes = ['read', 'write'] as const
   public groupTypes = { read: 'readGroups', write: 'writeGroups' } as const
   public guardTypes = { read: 'readGuards', write: 'writeGuards' } as const
 
@@ -973,11 +972,11 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Removes declined fields from an object. */
-  async removeDeclinedFieldsFromObject({object, mode, req, guardPreCache, ...params}: { 
+  async removeDeclinedFieldsFromObject({object, mode, req, guardResults, ...params}: { 
     object: Partial<MongooseDocument> | null
     mode: AccessType
     req: Request
-    guardPreCache?: GuardPreCache
+    guardResults?: GuardResults // TODO: why not in use?
   } & ({
     fields: RoboField<AccessGroup>[]
   } | {
@@ -1003,21 +1002,21 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     }
 
     const checkGroupAccess = !('modelName' in params) || !this.hasEveryNeededAccessGroup(params.modelName, mode, req.accessGroups as AccessGroup[])
-    guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fieldsInObj, mode)
+    guardResults = await this.calculateGuardResults({req, fields: fieldsInObj, mode, visitedGuards: guardResults})
 
-    const promises = fieldsInObj.map(field => this.removeDeclinedFieldsFromObjectHelper({object, req, field, mode, checkGroupAccess, guardPreCache}))
+    const promises = fieldsInObj.map(field => this.removeDeclinedFieldsFromObjectHelper({object, req, field, mode, checkGroupAccess, guardResults}))
     await Promise.all(promises)
   }
 
-  async removeDeclinedFieldsFromObjectHelper({ object, req, field, mode, checkGroupAccess, guardPreCache }: {
+  async removeDeclinedFieldsFromObjectHelper({ object, req, field, mode, checkGroupAccess, guardResults }: {
     object: Partial<MongooseDocument>
     mode: AccessType
     req: Request
-    guardPreCache: GuardPreCache
+    guardResults: GuardResults
     checkGroupAccess: boolean
     field: RoboField<AccessGroup>
   }) {
-    const declined = await this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache })
+    const declined = await this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardResults })
     if (declined) {
       delete object[field.key]
     }
@@ -1025,11 +1024,11 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       const fieldsOrModel = field.ref ? {modelName: field.ref} : {fields: field.subfields}
 
       if (Array.isArray(object[field.key])) {
-        const promises = (object[field.key] as Array<object>).map(obj => this.removeDeclinedFieldsFromObject({ ...fieldsOrModel, object: obj, mode, req, guardPreCache }))
+        const promises = (object[field.key] as Array<object>).map(obj => this.removeDeclinedFieldsFromObject({ ...fieldsOrModel, object: obj, mode, req, guardResults }))
         await Promise.all(promises)
       }
       else {
-        await this.removeDeclinedFieldsFromObject({ ...fieldsOrModel, object: object[field.key] as object, mode, req, guardPreCache })
+        await this.removeDeclinedFieldsFromObject({ ...fieldsOrModel, object: object[field.key] as object, mode, req, guardResults })
       }
     }
   }
@@ -1040,37 +1039,44 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Calculates a Map of every access guard function and their results, that appear on the given fields */
-  async calculateGuardPreCache(req: Request, fields: RoboField[], mode: AccessType): Promise<GuardPreCache> {
+  async calculateGuardResults({req, fields, mode, visitedGuards = new Map()}: {
+    req: Request,
+    fields: RoboField<AccessGroup>[]
+    mode: AccessType
+    visitedGuards?: GuardResults
+  }): Promise<GuardResults> {
     const guardType = this.guardTypes[mode]
 
-    const guards = new Set<GuardFunction>()
+    const newGuards = new Set<GuardFunction>()
     for (const field of fields) {
       for (const guard of field[guardType]) {
-        guards.add(guard)
+        if(!visitedGuards.has(guard)) {
+          newGuards.add(guard)
+        }
       }
     }
 
-    const promises = [...guards].map(g => promisify(g.call(this, req)))
+    const promises = [...newGuards].map(g => promisify(g.call(this, req)))
     const res = await Promise.allSettled(promises)
 
-    const preCache = new Map<GuardFunction, boolean>()
-    for (const guard of guards) {
+    const newResults = new Map<GuardFunction, boolean>()
+    for (const guard of newGuards) {
       const result = res.shift()!
       const guardValue = result.status == 'fulfilled' && result.value
 
-      preCache.set(guard, guardValue)
+      newResults.set(guard, guardValue)
     }
 
-    return preCache
+    return new Map([...visitedGuards, ...newResults])
   }
 
   /** Checks if the given field is readable/writeable with the request */
-  async isFieldDeclined({ req, field, mode, checkGroupAccess = true, guardPreCache = null }: {
+  async isFieldDeclined({ req, field, mode, checkGroupAccess = true, guardResults = null }: {
     req: Request
     field: RoboField<AccessGroup>
     mode: AccessType
     checkGroupAccess?: boolean
-    guardPreCache?: null | GuardPreCache
+    guardResults?: null | GuardResults
   }): Promise<boolean> {
     const shouldCheckAccess = mode == 'read' ? req.checkReadAccess : req.checkWriteAccess
     if (!shouldCheckAccess)
@@ -1082,7 +1088,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         return true
     }
 
-    return this.isFieldDecliendByGuards(req, field, mode, guardPreCache)
+    return this.isFieldDecliendByGuards(req, field, mode, guardResults)
   }
 
   /** Checks if the field is declined by the guard functions defined on it. */
@@ -1090,15 +1096,15 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     req: Request,
     field: RoboField<AccessGroup>,
     mode: AccessType,
-    guardPreCache: null | GuardPreCache = null
+    guardResults: null | GuardResults = null
   ): Promise<boolean> {
     const guardType = this.guardTypes[mode]
     if (!field[guardType].length)
       return false
 
     const promises = field[guardType].map(async (guard) => {
-      if (guardPreCache && guardPreCache.has(guard))
-        return guardPreCache.get(guard)!
+      if (guardResults && guardResults.has(guard))
+        return guardResults.get(guard)!
       else
         return promisify(guard.call(this, req))
     })
@@ -1119,9 +1125,9 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     modelName: string
   })) {
     const fields = 'fields' in params ? params.fields : this.schemas[params.modelName]
-    const guardPreCache = await this.calculateGuardPreCache(req, fields, mode)
+    const guardResults = await this.calculateGuardResults({req, fields, mode})
 
-    const promises = documents.map(doc => this.removeDeclinedFieldsFromObject({ ...params, object: doc, mode, req, guardPreCache }))
+    const promises = documents.map(doc => this.removeDeclinedFieldsFromObject({ ...params, object: doc, mode, req, guardResults }))
     await Promise.all(promises)
   }
 
@@ -1231,8 +1237,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   async getAccesses(modelName: string, req: Request): Promise<Accesses> {
-    const schema = this.schemas[modelName]
-
     // first we check for read and write accesses on the model itself
     const [canReadModel, canWriteModel] = await Promise.all([
       this.hasModelAccess(modelName, 'read', req),
@@ -1240,82 +1244,62 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     ])
 
     const modelAccesses = {
-        read: canReadModel,
-        write: canWriteModel,
+      read: canReadModel,
+      write: canWriteModel,
     }
 
-    // then we go and check each field
-    const fieldPromises = []
-    for (const mode of ['read', 'write'] as const) {
-      if (!modelAccesses[mode]) {
-        fieldPromises.push(Promise.resolve(null))
-      }
-      else {
-        const checkGroupAccess = !this.hasEveryNeededAccessGroup(modelName, mode, req.accessGroups as AccessGroup[])
-        const promise = this.getFieldAccesses({ fields: schema, mode, req, checkGroupAccess })
-        fieldPromises.push(promise)
-      }
-    }
+    // then we check the fields
+    const fieldAccesses: Accesses['fields'] = {}
+    const promises = this.accessTypes.map(async mode => {
+      if(!modelAccesses[mode])
+        return
+  
+      const [skipGroupAccessCheck, guardResults] = await Promise.all([
+        this.hasEveryNeededAccessGroup(modelName, mode, req.accessGroups as AccessGroup[]),
+        this.calculateGuardResults({req, fields: this.schemas[modelName], mode})
+      ])
+  
+      const promises = this.schemas[modelName].map(field => this.addFieldAccesses({ accesses: fieldAccesses, mode, field, req, checkGroupAccess: !skipGroupAccessCheck, guardResults }))
+      await Promise.all(promises)
+    })
+    await Promise.all(promises)
 
-    const [read, write] = await Promise.all(fieldPromises)
-    const fieldAccesses: Record<string, Partial<Accesses['fields'][string]>> = {}
+    // at last we combine the results
+    const canWriteAllRequiredFields = Object.keys(this.pathSchemas[modelName]).every(path => !this.pathSchemas[modelName][path].required || fieldAccesses[path]?.write)
 
-    // we merge the read and write accesses into one object
-    const accessResults = { read, write }
-    for (const mode of ['read', 'write'] as const) {
-      for (const field in accessResults[mode]) {
-        if (!fieldAccesses[field])
-          fieldAccesses[field] = {}
-
-        fieldAccesses[field][mode] = accessResults[mode][field]
-      }
-    }
-
-    const accesses = {
+    return {
       model: {
         ...modelAccesses,
-        writeAllRequired: !Object.keys(fieldAccesses).some(path => this.pathSchemas[modelName][path].required && !fieldAccesses[path].write)
+        create: canWriteModel && canWriteAllRequiredFields,
       },
-      fields: fieldAccesses as Accesses['fields']
+      fields: fieldAccesses
     }
-
-    // once field access are collected, we remove those entries where there is neither read nor write access
-    for (const path in accesses.fields) {
-      const field = accesses.fields[path]
-      if (!field.write && !field.read)
-        delete accesses.fields[path]
-    }
-
-    return accesses
   }
 
-  async getFieldAccesses({ fields, mode, req, checkGroupAccess, accesses = {}, prefix = '', guardPreCache = null }: {
-    fields: RoboField<AccessGroup>[]
+  async addFieldAccesses({ mode, field, req, checkGroupAccess, guardResults, accesses = {}, prefix = '' }: {
+    accesses: Record<string, Partial<Record<AccessType, boolean>>>
     mode: AccessType
+    field: RoboField<AccessGroup>
     req: Request
     checkGroupAccess: boolean
-    accesses?: Record<string, boolean>
+    guardResults: GuardResults
     prefix?: string
-    guardPreCache?: GuardPreCache | null
-  }): Promise<Record<string, boolean>> {
-    guardPreCache = guardPreCache || await this.calculateGuardPreCache(req, fields, mode)
+  }) {
+    const isDeclined = await this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardResults })
+    if(isDeclined)
+      return
 
-    const promises = fields.map(field => this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache }))
-    const results = await Promise.all(promises)
+    const absolutePath = prefix + field.key
+    if(!accesses[absolutePath])
+      accesses[absolutePath] = {}
 
-    const subPromises = []
-    for (const field of fields) {
-      const absolutePath = prefix + field.key
-      accesses[absolutePath] = !results.shift()
+    accesses[absolutePath][mode] = true
 
-      if (field.subfields && !field.ref && accesses[absolutePath]) {
-        const promise = this.getFieldAccesses({ fields: field.subfields, mode, req, checkGroupAccess, accesses, prefix: `${absolutePath}.`, guardPreCache })
-        subPromises.push(promise)
-      }
+    if (field.subfields && !field.ref) {
+      const subGuardResults = await this.calculateGuardResults({req, fields: field.subfields, mode, visitedGuards: guardResults})
+      const promises = field.subfields.map(f => this.addFieldAccesses({ mode, field: f, req, checkGroupAccess, guardResults: subGuardResults, accesses, prefix: `${absolutePath}.` }))
+      await Promise.all(promises)
     }
-
-    await Promise.all(subPromises)
-    return accesses
   }
 
   /** Generates all the routes of robogo and returns the express router. */

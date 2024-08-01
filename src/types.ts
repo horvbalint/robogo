@@ -6,7 +6,7 @@ export type MaybePromise<T> = T | Promise<T>
 export type FileMiddlewareFunction = (req: Request) => Promise<void>
 export type AccessType = 'read' | 'write'
 export type GuardFunction = (req: Request) => MaybePromise<boolean>
-export type GuardPreCache = Map<GuardFunction, boolean>
+export type GuardResults = Map<GuardFunction, boolean>
 export type ServiceFunction = (req: Request, res: Response, data?: unknown) => unknown
 export type MiddlewareTiming = 'before' | 'after'
 export type OperationType = 'C' | 'R' | 'U' | 'D' | 'S'
@@ -96,10 +96,7 @@ export interface Accesses {
   model: {
     read: boolean
     write: boolean
-    writeAllRequired: boolean
+    create: boolean
   }
-  fields: Record<string, {
-    read: boolean
-    write: boolean
-  }>
+  fields: Record<string, Partial<Record<AccessType, true>>>
 }
