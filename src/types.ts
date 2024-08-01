@@ -7,7 +7,7 @@ export type FileMiddlewareFunction = (req: Request) => Promise<void>
 export type AccessType = 'read' | 'write'
 export type GuardFunction = (req: Request) => MaybePromise<boolean>
 export type GuardResults = Map<GuardFunction, boolean>
-export type ServiceFunction = (req: Request, res: Response, data?: unknown) => unknown
+export type ServiceFunction = (req: Request, res: Response, data?: unknown) => Promise<unknown>
 export type MiddlewareTiming = 'before' | 'after'
 export type OperationType = 'C' | 'R' | 'U' | 'D' | 'S'
 export type MiddlewareBeforeFunction = (req: Request, res: Response) => Promise<void>

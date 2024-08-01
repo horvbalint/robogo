@@ -246,14 +246,14 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         continue
 
       if (Array.isArray(this.adminGroups)) {
-        target[groupType].unshift(...this.adminGroups)
+        target[groupType]!.unshift(...this.adminGroups)
       }
       else if (typeof this.adminGroups == 'object') {
         for (const namespace of model.namespaces) {
           if (!this.adminGroups[namespace])
             continue
 
-          target[groupType].unshift(...this.adminGroups[namespace])
+          target[groupType]!.unshift(...this.adminGroups[namespace]!)
         }
       }
       else {
@@ -268,7 +268,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       if (!source[groupType])
         continue
 
-      for (const group of source[groupType]) {
+      for (const group of source[groupType]!) {
         if (!this.accessGroups[group]) {
           this.logger.logUnknownAccessGroupInModel(model.model.modelName, group, `processing the model '${model.model.modelName}'`)
         }
@@ -392,7 +392,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     for(const groupType of Object.values(this.groupTypes)) {
       if(subField[groupType]) {
         if(roboField[groupType])
-          roboField[groupType] = [...roboField[groupType], ...subField[groupType]]
+          roboField[groupType] = [...roboField[groupType]!, ...subField[groupType]!]
         else
           roboField[groupType] = subField[groupType]
       }
@@ -717,37 +717,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   // }
 
   // /**
-  //  * Recursively creates field descriptors that only have those information, which can be useful on the frontend.
-  //  * This function does NOT check field access, if that is needed please provide the result of the RemoveDeclinedFieldsFromSchema call as the first parameter.
-  //  * @param {(string | Array)} schema - Model name or robogo schema descriptor
-  //  * @param {number} [maxDepth] - Maximum reference depth
-  //  * @param {number} [depth] - This parameter should be leaved empty
-  //  */
-  // GetFields(schema, maxDepth = Infinity, depth = 0) {
-  //   if (typeof schema == 'string')
-  //     schema = (maxDepth == Infinity ? this.decycledSchemas : this.schemas[this.baseDBString])[schema] // if string was given, we get the schema descriptor
-
-  //   const fields = []
-
-  //   for (const field of schema) {
-  //     if (field.hidden)
-  //       continue // fields marked as hidden should not be included in fields
-  //     const fieldDescriptor = {}
-
-  //     for (const key of ['name', 'key', 'description', 'type', 'isArray', 'marked']) // we copy theese fields as they are useful on the frontend
-  //       fieldDescriptor[key] = field[key]
-
-  //     // if current depth is lower then max, we collect the descriptors of the subfields
-  //     if (field.subfields && depth < maxDepth)
-  //       fieldDescriptor.subfields = this.GetFields(field.subfields, maxDepth, field.ref ? depth + 1 : depth)
-
-  //     fields.push(fieldDescriptor)
-  //   }
-
-  //   return fields
-  // }
-
-  // /**
   //  * Helper function, that is used when an image was uploaded.
   //  * It will resize the image to the specified size if needed.
   //  * It will create a RoboFile document for the image, with the properties of the image.
@@ -878,28 +847,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   //   return Promise.allSettled(fieldPromises)
   //     .then(res => res.filter(r => r.status == 'fulfilled').map(r => r.value))
-  // }
-
-  // /**
-  //  * A helper function, that is a template for Service routes.
-  //  * @param {object} req
-  //  * @param {object} res
-  //  * @param {string} paramsKey
-  //  */
-  // ServiceRoute(req, res, paramsKey) {
-  //   if (!this.services[req.params.service]) {
-  //     this.logger.LogMissingService(req.params.service, `serving the route: '${req.method} ${req.path}'`)
-  //     return res.status(500).send('MISSING SERVICE')
-  //   }
-  //   if (!this.services[req.params.service][req.params.fun]) {
-  //     this.logger.LogMissingServiceFunction(req.params.service, req.params.fun, `serving the route: '${req.method} ${req.path}'`)
-  //     return res.status(500).send('MISSING SERVICE FUNCTION')
-  //   }
-
-  //   this.services[req.params.service][req.params.fun]
-  //     .call(this, req, res, req[paramsKey])
-  //     .then(result => res.send(result))
-  //     .catch(error => res.status(500).send(error))
   // }
 
   /** A helper function, that is a template for the CRUDS category routes. */
@@ -1302,6 +1249,54 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     }
   }
 
+  serviceRoute(req: Request, res: Response, paramsKey: 'body' | 'query') {
+    if (!this.services[req.params.service]) {
+      this.logger.logMissingService(req.params.service, `serving the route: '${req.method} ${req.path}'`)
+      return res.status(500).send('MISSING SERVICE')
+    }
+    if (!this.services[req.params.service][req.params.fun]) {
+      this.logger.logMissingServiceFunction(req.params.service, req.params.fun, `serving the route: '${req.method} ${req.path}'`)
+      return res.status(500).send('MISSING SERVICE FUNCTION')
+    }
+
+    this.services[req.params.service][req.params.fun]
+      .call(this, req, res, req[paramsKey])
+      .then(result => res.send(result))
+      .catch(error => res.status(500).send(error))
+  }
+
+  //   /**
+  //  * Recursively creates field descriptors that only have those information, which can be useful on the frontend.
+  //  * This function does NOT check field access, if that is needed please provide the result of the RemoveDeclinedFieldsFromSchema call as the first parameter.
+  //  * @param {(string | Array)} schema - Model name or robogo schema descriptor
+  //  * @param {number} [maxDepth] - Maximum reference depth
+  //  * @param {number} [depth] - This parameter should be leaved empty
+  //  */
+  // GetFields(schema, maxDepth = Infinity, depth = 0) {
+  //   if (typeof schema == 'string')
+  //     schema = (maxDepth == Infinity ? this.decycledSchemas : this.schemas[this.baseDBString])[schema] // if string was given, we get the schema descriptor
+
+  //   const fields = []
+
+  //   for (const field of schema) {
+  //     if (field.hidden)
+  //       continue // fields marked as hidden should not be included in fields
+  //     const fieldDescriptor = {}
+
+  //     for (const key of ['name', 'key', 'description', 'type', 'isArray', 'marked']) // we copy theese fields as they are useful on the frontend
+  //       fieldDescriptor[key] = field[key]
+
+  //     // if current depth is lower then max, we collect the descriptors of the subfields
+  //     if (field.subfields && depth < maxDepth)
+  //       fieldDescriptor.subfields = this.GetFields(field.subfields, maxDepth, field.ref ? depth + 1 : depth)
+
+  //     fields.push(fieldDescriptor)
+  //   }
+
+  //   return fields
+  // }
+
+
   /** Generates all the routes of robogo and returns the express router. */
   generateRoutes() {
     Router.use((req, res, next) => {
@@ -1432,11 +1427,11 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
     // SERVICE routes
     Router.post('/runner/:service/:fun', (req, res) => {
-      this.ServiceRoute(req, res, 'body')
+      this.serviceRoute(req, res, 'body')
     })
 
     Router.get('/getter/:service/:fun', (req, res) => {
-      this.ServiceRoute(req, res, 'query')
+      this.serviceRoute(req, res, 'query')
     })
     // ----------------
 
