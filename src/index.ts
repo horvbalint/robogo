@@ -23,10 +23,10 @@ class MiddlewareError extends Error {
 interface RobogoConfig<Namespace extends string, AccessGroup extends string> {
   /** The mongoose connection instance */
   mongooseConnection: mongoose.Connection
-  /** Path to the directory in which the mongoose models are defined and exported */
-  schemaDir: string
-  /** Path to the directory in which the robogo services are defined and exported */
-  serviceDir?: string | null
+  /** Glob pattern to the schema files (eg.: './schemas/*.ts')  */
+  schemaPathGlob: string
+  /** Glob pattern to the service files (eg.: './services/*.ts')  */
+  servicePathGlob?: string | null
   /** Path to the directory in which robogo should store the uploaded files */
   fileDir?: string | null
   /** The time in milliseconds until if the same file is requested another time, it can be served from the cache memory */
@@ -93,8 +93,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   constructor({
     mongooseConnection,
-    schemaDir,
-    serviceDir = null,
+    servicePathGlob = null,
     fileDir = null,
     maxFileCacheAge = 5000,
     maxImageSize = 800,
@@ -112,8 +111,8 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     showLogs = true,
   }: RobogoConfig<Namespace, AccessGroup>) {
     this.mongooseConnection = mongooseConnection
-    this.schemaDir = schemaDir
-    this.serviceDir = serviceDir
+    this.schemaPathGlob = this.schemaPathGlob
+    this.servicePathGlob = servicePathGlob
     this.fileDir = fileDir
     this.maxFileCacheAge = maxFileCacheAge
     this.maxImageSize = maxImageSize
@@ -157,9 +156,9 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     if (this.fileDir)
       this.upload = multer({ dest: this.fileDir }) // multer will handle the saving of files, when one is uploaded
 
-    // Imports every file from "serviceDir" into the "services" object
-    if (this.serviceDir) {
-      for (const serviceFile of await glob(this.serviceDir)) {
+    // Imports every file from "servicePathGlob" into the "services" object
+    if (this.servicePathGlob) {
+      for (const serviceFile of await glob(this.servicePathGlob)) {
         const serviceName = serviceFile.split('/').at(-1)!.split('.')[0]
         const imported = await import(serviceFile) // TODO: some progress reporting would ge great
         this.services[serviceName] = imported.default || imported
@@ -179,8 +178,8 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
    * Finally it handles the references between the schemas.
    */
   async processSchemas() {
-    for (const schemaPath of await glob(this.schemaDir)) {
-      const {default: mongooseModel}: {default: mongoose.Model<unknown>} = await import(schemaPath)
+    for (const schemaPathGlob of await glob(this.schemaPathGlob)) {
+      const {default: mongooseModel}: {default: mongoose.Model<unknown>} = await import(schemaPathGlob)
       
       this.models[mongooseModel.modelName] = this.generateModel(mongooseModel)
       this.schemas[mongooseModel.modelName] = this.generateSchema(this.models[mongooseModel.modelName])
@@ -331,7 +330,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       roboField.isArray = true
 
     // these keys are only added if specified
-    const optionKeys = ['required', 'name', 'description', 'marked', 'hidden', 'enum', 'autopopulate', 'default', 'readGroups', 'writeGroups'] as const
+    const optionKeys = ['required', 'name', 'description', 'enum', 'autopopulate', 'default', 'readGroups', 'writeGroups'] as const
     for(const key of optionKeys) {
       if(type.options.hasOwnProperty(key))
         roboField[key] = type.options[key]
@@ -381,7 +380,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     roboField.writeGuards = [...roboField.writeGuards, ...subField.writeGuards]
     
     // add some properties if they do not exist
-    const keysToCopy = ['name', 'description', 'marked', 'hidden', 'ref', 'enum', 'default', 'autopopulate'] as const
+    const keysToCopy = ['name', 'description', 'ref', 'enum', 'default', 'autopopulate'] as const
     for(const key of keysToCopy) {
       if(subField[key] !== undefined)
         // @ts-expect-error this is ok
@@ -806,48 +805,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   //   this.middlewares[modelName][operation][timing] = middlewareFunction
   // }
-  
-  // async RemoveDeclinedFieldsFromSchema(fields, req, mode) {
-  //   let model = null
-  //   if (typeof fields == 'string') { // if model name was given, then we get the models fields
-  //     model = fields
-  //     fields = this.decycledSchemas[model]
-  //   }
-
-  //   if (!fields.length)
-  //     return Promise.resolve(fields)
-
-  //   const checkGroupAccess = !model || !this.hasEveryNeededAccessGroup(model, mode, req.accessGroups)
-  //   const fieldPromises = []
-
-  //   const guardPreCache = await this.calculateGuardPreCache(req, fields, mode)
-  //   for (const field of fields) {
-  //     const promise = this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardPreCache })
-  //       .then((declined) => {
-  //         if (declined)
-  //           return Promise.reject()
-
-  //         const promises = [{ ...field }]
-
-  //         if (field.subfields) {
-  //           const promise = this.RemoveDeclinedFieldsFromSchema(field.subfields, req, mode) // IMPROVEMENT: we should pass the field.ref to the recursion, so it can optimize more, but it should be passed alongside the fields so we don't get into a infinite loop.
-  //           promises.push(promise)
-  //         }
-
-  //         return Promise.all(promises)
-  //       })
-  //       .then(([newField, subfields]) => {
-  //         if (subfields)
-  //           newField.subfields = subfields
-  //         return newField
-  //       })
-
-  //     fieldPromises.push(promise)
-  //   }
-
-  //   return Promise.allSettled(fieldPromises)
-  //     .then(res => res.filter(r => r.status == 'fulfilled').map(r => r.value))
-  // }
 
   /** A helper function, that is a template for the CRUDS category routes. */
   async CRUDSRoute<T>({req, res, operation, mainPart, responsePart}: {
@@ -949,7 +906,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     }
 
     const checkGroupAccess = !('modelName' in params) || !this.hasEveryNeededAccessGroup(params.modelName, mode, req.accessGroups as AccessGroup[])
-    guardResults = await this.calculateGuardResults({req, fields: fieldsInObj, mode, visitedGuards: guardResults})
+    guardResults = await this.calculateGuardResults({req, fields: fieldsInObj, mode, calculatedGuardResults: guardResults})
 
     const promises = fieldsInObj.map(field => this.removeDeclinedFieldsFromObjectHelper({object, req, field, mode, checkGroupAccess, guardResults}))
     await Promise.all(promises)
@@ -986,18 +943,18 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Calculates a Map of every access guard function and their results, that appear on the given fields */
-  async calculateGuardResults({req, fields, mode, visitedGuards = new Map()}: {
+  async calculateGuardResults({req, fields, mode, calculatedGuardResults = new Map()}: {
     req: Request,
     fields: RoboField<AccessGroup>[]
     mode: AccessType
-    visitedGuards?: GuardResults
+    calculatedGuardResults?: GuardResults
   }): Promise<GuardResults> {
     const guardType = this.guardTypes[mode]
 
     const newGuards = new Set<GuardFunction>()
     for (const field of fields) {
       for (const guard of field[guardType]) {
-        if(!visitedGuards.has(guard)) {
+        if(!calculatedGuardResults.has(guard)) {
           newGuards.add(guard)
         }
       }
@@ -1014,7 +971,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       newResults.set(guard, guardValue)
     }
 
-    return new Map([...visitedGuards, ...newResults])
+    return new Map([...calculatedGuardResults, ...newResults])
   }
 
   /** Checks if the given field is readable/writeable with the request */
@@ -1243,7 +1200,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     accesses[absolutePath][mode] = true
 
     if (field.subfields && !field.ref) {
-      const subGuardResults = await this.calculateGuardResults({req, fields: field.subfields, mode, visitedGuards: guardResults})
+      const subGuardResults = await this.calculateGuardResults({req, fields: field.subfields, mode, calculatedGuardResults: guardResults})
       const promises = field.subfields.map(f => this.addFieldAccesses({ mode, field: f, req, checkGroupAccess, guardResults: subGuardResults, accesses, prefix: `${absolutePath}.` }))
       await Promise.all(promises)
     }
@@ -1265,37 +1222,32 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       .catch(error => res.status(500).send(error))
   }
 
-  //   /**
-  //  * Recursively creates field descriptors that only have those information, which can be useful on the frontend.
-  //  * This function does NOT check field access, if that is needed please provide the result of the RemoveDeclinedFieldsFromSchema call as the first parameter.
-  //  * @param {(string | Array)} schema - Model name or robogo schema descriptor
-  //  * @param {number} [maxDepth] - Maximum reference depth
-  //  * @param {number} [depth] - This parameter should be leaved empty
-  //  */
-  // GetFields(schema, maxDepth = Infinity, depth = 0) {
-  //   if (typeof schema == 'string')
-  //     schema = (maxDepth == Infinity ? this.decycledSchemas : this.schemas[this.baseDBString])[schema] // if string was given, we get the schema descriptor
+  /** Removes every fields that cannot be read/written by the provided request. The fields parameter should always be a 'decycledSchema'. */
+  async removeDeclinedFieldsFromSchema({fields, req, mode, modelName, guardResults}: {
+    fields: RoboField<AccessGroup>[]
+    mode: AccessType
+    req: Request
+    modelName?: string
+    guardResults?: GuardResults
+  }) {
+    if (!fields.length)
+      return fields
 
-  //   const fields = []
+    const checkGroupAccess = !modelName || !this.hasEveryNeededAccessGroup(modelName, mode, req.accessGroups as AccessGroup[])
+    guardResults = await this.calculateGuardResults({req, fields, mode, calculatedGuardResults: guardResults})
 
-  //   for (const field of schema) {
-  //     if (field.hidden)
-  //       continue // fields marked as hidden should not be included in fields
-  //     const fieldDescriptor = {}
+    const notDeclinedFields = await asyncFilter(fields, field => this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardResults }))
+    const promises = notDeclinedFields.map(async field => {
+      const fieldCopy = {...field}
 
-  //     for (const key of ['name', 'key', 'description', 'type', 'isArray', 'marked']) // we copy theese fields as they are useful on the frontend
-  //       fieldDescriptor[key] = field[key]
+      if(fieldCopy.subfields)
+        fieldCopy.subfields = await this.removeDeclinedFieldsFromSchema({fields: fieldCopy.subfields, req, mode, guardResults, modelName: field.ref}) // IMPROVEMENT: we should pass the field.ref to the recursion, so it can optimize more, but it should be passed alongside the fields so we don't get into a infinite loop.
 
-  //     // if current depth is lower then max, we collect the descriptors of the subfields
-  //     if (field.subfields && depth < maxDepth)
-  //       fieldDescriptor.subfields = this.GetFields(field.subfields, maxDepth, field.ref ? depth + 1 : depth)
+      return fieldCopy
+    })
 
-  //     fields.push(fieldDescriptor)
-  //   }
-
-  //   return fields
-  // }
-
+    return Promise.all(promises)
+  }
 
   /** Generates all the routes of robogo and returns the express router. */
   generateRoutes() {
@@ -1438,7 +1390,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     // FILE routes
     if (this.fileDir) {
       Router.use(
-        `${this.serveStaticPath}`,
+        '/static',
         (req, res, next) => {
           if (!this.fileReadMiddleware)
             return next()
@@ -1449,7 +1401,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         },
         express.static(path.resolve(__dirname, this.fileDir), { maxAge: this.maxFileCacheAge }),
       )
-      Router.use(`${this.serveStaticPath}`, (req, res) => res.status(404).send('NOT FOUND')) // If a file is not found in FileDir, send back 404 NOT FOUND
+      Router.use('/static', (req, res) => res.status(404).send('NOT FOUND')) // If a file is not found in FileDir, send back 404 NOT FOUND
 
       Router.post(
         '/fileupload',
@@ -1611,37 +1563,17 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         })
     })
 
-    Router.get('/schema/:model', (req, res) => {
-      this.CRUDSRoute({
-        req,
-        res,
-        operation: 'S',
-        mainPart: async () => this.decycledSchemas[req.params.model],
-        responsePart: async result => {
-          if (req.checkReadAccess)
-            result = await this.removeDeclinedFieldsFromSchema(result, req, 'read')
-  
-          res.send(result)
-        },
-      })
-    })
-
     Router.get('/fields/:model', (req, res) => {
       this.CRUDSRoute({
         req,
         res,
         operation: 'S',
-        mainPart: async () => {
-          let schema = this.decycledSchemas[req.params.model]
-  
+        mainPart: async () => this.decycledSchemas[req.params.model],
+        responsePart: async fields => {
           if (req.checkReadAccess)
-            schema = await this.removeDeclinedFieldsFromSchema(schema, req, 'read')
+            fields = await this.removeDeclinedFieldsFromSchema({fields, req, mode: 'read', modelName: req.params.model})
   
-          const fields = this.getFields(schema, req.query.depth)
-          return fields
-        },
-        responsePart: async result => {
-          res.send(result)
+          res.send(fields)
         },
       })
     })
@@ -1687,4 +1619,11 @@ function promisify<T>(value: T): Promise<Awaited<T>>  {
     return value
   else
     return Promise.resolve(value)
+}
+
+async function asyncFilter<T>(array: T[], predicate: (item: T) => Promise<boolean>): Promise<T[]> {
+  const promises = array.map(item => predicate(item))
+  const results = await Promise.all(promises)
+
+  return array.filter((item, index) => results[index])
 }

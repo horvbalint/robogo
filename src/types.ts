@@ -36,6 +36,8 @@ export interface WithAccessGroups<AccessGroup extends string> {
   writeGroups?: AccessGroup[]
 }
 
+export interface FieldProps {}
+
 export interface RoboField<AccessGroup extends string = string> extends WithAccessGroups<AccessGroup> {
   /** The key of the field */
   key: string
@@ -50,15 +52,11 @@ export interface RoboField<AccessGroup extends string = string> extends WithAcce
   /** A description provided to the field */
   description?: string
   /** Arbitrary data for the field */
-  props: Record<string, unknown>
+  props: FieldProps
   /** A list of guard functions to be used for 'read' like operations */
   readGuards: GuardFunction[]
   /** A list of guard functions to be used for 'write' like operations */
   writeGuards: GuardFunction[]
-  /** Indiciates whether the field is marked TODO */
-  marked?: boolean
-  /** Indiciates whether the field is hidden TODO */
-  hidden?: boolean
   /** Name of the model that the field references */
   ref?: string
   /** The mongoose enum field */
