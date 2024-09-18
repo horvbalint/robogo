@@ -2,6 +2,7 @@ import type mongoose from 'mongoose'
 import type { Request, Response } from 'express'
 import { ObjectId } from 'mongoose'
 
+export type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>
 export type MaybePromise<T> = T | Promise<T>
 export type FileMiddlewareFunction = (req: Request) => Promise<void>
 export type AccessType = 'read' | 'write'
@@ -12,7 +13,6 @@ export type MiddlewareTiming = 'before' | 'after'
 export type OperationType = 'C' | 'R' | 'U' | 'D' | 'S'
 export type MiddlewareBeforeFunction = (req: Request, res: Response) => Promise<void>
 export type MiddlewareAfterFunction = (req: Request, res: Response, result: unknown) => Promise<void>
-export interface NestedArray<T> extends Array<NestedArray<T> | T> {}
 export type SortValue = NonNullable<Parameters<mongoose.Query<unknown, unknown>['sort']>[0]>
 export type SortObject = {
   [key: string]: mongoose.SortOrder | {

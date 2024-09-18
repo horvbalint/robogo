@@ -9,8 +9,8 @@ declare module 'mongoose' {
     writeGuards?: GuardFunction[]
     defaultFilter?: Record<string, unknown>
     defaultSort?: SortValue
-    readGroups: string[]
-    writeGroups: string[]
+    readGroups?: string[]
+    writeGroups?: string[]
   }
 
   interface AnyObject {

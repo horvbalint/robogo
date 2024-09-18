@@ -3,14 +3,15 @@ import fs from 'node:fs'
 import express from 'express'
 import multer from 'multer'
 import sharp from 'sharp'
-import Fuse from 'fuse.js'
 import type mongoose from 'mongoose'
 import type { Request, Response } from 'express'
 import { glob } from 'glob'
 import RoboFileModel from './schemas/roboFile'
 import Logger from './utils/logger'
 import MinimalSetCollection from './utils/minimalSetCollection'
-import type { Accesses, AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, NestedArray, OperationType, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
+import type { Accesses, AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, OperationType, Optional, RoboField,  ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
+import type {RequestHandler} from 'express'
+import { RoboFile } from './mongooseTypes/mongoose.gen'
 
 const Router = express.Router()
 
@@ -520,265 +521,91 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     return resultCombinations
   }
 
-  // /**
-  //  * Returns the field paths of a model that are safe to be used with fuse.js. JSDoc
-  //  * @param {(string | Array)} schema
-  //  * @param {number} [maxDepth]
-  //  */
-  // GetSearchKeys(schema, maxDepth = Infinity) {
-  //   if (typeof schema == 'string')
-  //     schema = this.decycledSchemas[schema] // if string was given, we get the schema descriptor
+  wrapExpressMiddleware(middleware: FileMiddlewareFunction | null): RequestHandler {
+    return (req, res, next) => {
+      if (!middleware)
+        return next()
 
-  //   const keys = []
+      promisify(middleware(req))
+        .then(() => next())
+        .catch(reason => res.status(403).send(reason))
+    }
+  }
 
-  //   for (const field of schema)
-  //     this.GenerateSearchKeys(field, keys, maxDepth)
+  /**
+   * Helper function, that is used when an image was uploaded.
+   * It will resize the image to the specified size if needed.
+   * It will create a RoboFile document for the image, with the properties of the image.
+   * It will also create a thumbnail of the image if needed.
+   */
+  async handleImageUpload(file: Express.Multer.File) {
+    const multerPath = file.path
+    const type = file.mimetype
+    const extension = file.originalname.split('.').pop()!
+    const filePath = `${file.filename}.${extension}`
 
-  //   return keys
-  // }
+    const resizedSize = await this.resizeImageTo(multerPath, this.maxImageSize, `${multerPath}.${extension}`)
+    const newSize = resizedSize || file.size
 
-  // /**
-  //  * Recursively collects the field paths of a field and its subfields that are safe to be used with fuse.js.
-  //  * @param {object} field - A robogo field descriptor
-  //  * @param {Array} keys - Keys will be collected in this array
-  //  * @param {number} maxDepth
-  //  * @param {*} [prefix] - This parameter should be leaved empty
-  //  * @param {*} [depth] - This parameter should be leaved empty
-  //  */
-  // GenerateSearchKeys(field, keys, maxDepth, prefix = '', depth = 0) {
-  //   if (depth > maxDepth)
-  //     return
+    if (this.createThumbnail)
+      await this.resizeImageTo(multerPath, this.maxThumbnailSize, `${multerPath}_thumbnail.${extension}`)
 
-  //   if (!['Object', 'Date'].some(t => field.type == t) && !field.subfields) // fuse.js can not handle values that are not strings or numbers, so we don't collect those keys.
-  //     keys.push(`${prefix}${field.key}`)
+    await fs.promises.unlink(multerPath)
 
-  //   if (field.subfields) {
-  //     for (const f of field.subfields)
-  //       this.GenerateSearchKeys(f, keys, maxDepth, `${prefix}${field.key}.`, depth + 1)
-  //   }
-  // }
+    const roboFileData: Omit<RoboFile, '_id'> = { // TODO: give type
+      name: file.originalname,
+      path: filePath,
+      type,
+      size: newSize,
+      extension,
+      isImage: true,
+    }
+    if(this.createThumbnail)
+      roboFileData.thumbnailPath = `${file.filename}_thumbnail.${extension}`
 
-  // /**
-  //  * Creates a robogo field descriptor from a mongoose one.
-  //  * @param {string} fieldKey
-  //  * @param {object} fieldDescriptor - A mongoose field descriptor
-  //  */
-  // GenerateSchemaField(fieldKey, fieldDescriptor, modelName) {
-  //   // we basically collect the information we know about the field
-  //   const softDeletedOn = fieldDescriptor.options.softDelete
-  //   if (softDeletedOn !== undefined)
-  //     this.models[modelName].defaultFilter[fieldKey] = { $ne: softDeletedOn }
+    return RoboFileModel.create(roboFileData)
+  }
 
-  //   const field = {
-  //     key: fieldKey,
-  //     isArray: fieldDescriptor.instance == 'Array',
-  //     type: fieldDescriptor.instance,
-  //     required: fieldDescriptor.options.required || false,
-  //     name: fieldDescriptor.options.name || null,
-  //     description: fieldDescriptor.options.description || null,
-  //     props: fieldDescriptor.options.props || {},
-  //     readGuards: fieldDescriptor.options.readGuards || [],
-  //     writeGuards: fieldDescriptor.options.writeGuards || [],
-  //   }
-  //   if (fieldDescriptor.options.marked)
-  //     field.marked = true
-  //   if (fieldDescriptor.options.hidden)
-  //     field.hidden = true
-  //   if (fieldDescriptor.options.ref)
-  //     field.ref = fieldDescriptor.options.ref
-  //   if (fieldDescriptor.options.enum)
-  //     field.enum = fieldDescriptor.options.enum
-  //   if (fieldDescriptor.options.autopopulate)
-  //     field.autopopulate = fieldDescriptor.options.autopopulate
-  //   if (fieldDescriptor.options.hasOwnProperty('default'))
-  //     field.default = fieldDescriptor.options.default
-  //   if (fieldDescriptor.options.readGroups)
-  //     field.readGroups = fieldDescriptor.options.readGroups
-  //   if (fieldDescriptor.options.writeGroups)
-  //     field.writeGroups = fieldDescriptor.options.writeGroups
+    /**
+     * Resizes an image at the sourcePath to the given size and saves it to the destinationPath.
+     * @param {string} sourcePath
+     * @param {number} size
+     * @param {string} destinationPath
+     */
+    async resizeImageTo(sourcePath: string, size: number, destinationPath: string) {
+      if (size == null) { // if size is null, we do not resize just save it to the destination path
+        await fs.promises.copyFile(sourcePath, destinationPath)
+      }
+      else {
+        const newSize = await sharp(sourcePath)
+            .rotate()
+            .resize(size, size, {
+              fit: 'inside',
+              withoutEnlargement: true,
+            })
+            .toFile(destinationPath)
+            .then(info => info.size)
 
-  //   // if the field is an array we extract the informations of the type it holds
-  //   if (field.isArray) {
-  //     const Emb = fieldDescriptor.$embeddedSchemaType
+        return newSize
+      }
+    }
 
-  //     field.type = Emb.instance || 'Object'
-  //     field.name = field.name || Emb.options.name || null
-  //     field.description = field.description || Emb.options.description || null
-  //     field.props = field.props || Emb.options.props || {}
-  //     field.readGuards = [...(field.readGuards || []), ...(Emb.options.readGuards || [])] // collecting all access groups without duplication
-  //     field.writeGuards = [...(field.writeGuards || []), ...(Emb.options.writeGuards || [])] // collecting all access groups without duplication
+  async handleFileUpload(file: Express.Multer.File) {
+    const multerPath = file.path
+    const type = file.mimetype
+    const extension = file.originalname.split('.').pop()
+    const filePath = `${file.filename}.${extension}` // the file will be saved with the extension attached
 
-  //     field.subfields = []
-  //     if (Emb.options.marked)
-  //       field.marked = true
-  //     if (Emb.options.hidden)
-  //       field.hidden = true
-  //     if (Emb.options.ref)
-  //       field.ref = Emb.options.ref
-  //     if (Emb.options.enum)
-  //       field.enum = Emb.options.enum
-  //     if (Emb.options.hasOwnProperty('default') && !field.default)
-  //       field.default = Emb.options.default
-  //     if (Emb.options.autopopulate)
-  //       field.autopopulate = Emb.options.autopopulate
-  //     if (Emb.options.readGroups)
-  //       field.readGroups = [...new Set([...(field.readGroups || []), ...(Emb.options.readGroups || [])])] // collecting all access groups without duplication
-  //     if (Emb.options.writeGroups)
-  //       field.writeGroups = [...new Set([...(field.writeGroups || []), ...(Emb.options.writeGroups || [])])] // collecting all access groups without duplication
-  //   }
+    await fs.promises.rename(multerPath, `${multerPath}.${extension}`)
 
-  //   for (const groupType of Object.values(this.groupTypes)) {
-  //     if (!field[groupType])
-  //       continue
-
-  //     // we add the 'adminGroups' to the accessGroups if it was not empty
-  //     if (this.adminGroups) {
-  //       if (Array.isArray(this.adminGroups)) {
-  //         field[groupType].unshift(...this.adminGroups)
-  //       }
-
-  //       else if (typeof this.adminGroups == 'object') {
-  //         for (const namespace of this.models[modelName].namespaces) {
-  //           if (!this.adminGroups[namespace])
-  //             continue
-
-  //           field[groupType].unshift(...this.adminGroups[namespace])
-  //         }
-  //       }
-
-  //       else {
-  //         this.logger.LogIncorrectAdminGroups(this.adminGroups, `processing the admin groups of the field '${modelName} -> ${field.key}'`)
-  //       }
-  //     }
-
-  //     // We check if an access group is used, that was not provided in the constructor,
-  //     // if so we warn the developer, because it might be a typo.
-  //     for (const group of field[groupType]) {
-  //       if (!this.accessGroups[group]) {
-  //         this.logger.LogUnknownAccessGroupInField(modelName, field.key, group, `processing the field '${modelName} -> ${field.key}'`)
-  //       }
-  //       else if (
-  //         this.accessGroups[group].length && this.models[modelName].namespaces.length
-  //         && !this.accessGroups[group].some(namespace => this.models[modelName].namespaces.includes(namespace))
-  //       ) {
-  //         this.logger.LogIncorrectAccessGroupNamespaceInField(modelName, field.key, group, this.accessGroups[group], this.models[modelName].namespaces, `processing the field '${modelName} -> ${field.key}'`)
-  //       }
-  //     }
-  //   }
-
-  //   if (field.type == 'ObjectID') {
-  //     field.type = 'Object'
-  //   }
-  //   else if (field.type == 'Embedded') {
-  //     field.type = 'Object'
-  //     field.subfields = []
-  //   }
-
-  //   // If a Mixed type is found we try to check if it was intentional or not
-  //   // if not, then we warn the user about the possible error
-  //   // TODO: Find a better way to do this
-  //   else if (field.type == 'Mixed') {
-  //     let givenType = field.type
-  //     field.type = 'Object'
-
-  //     if (fieldDescriptor.options) {
-  //       if (Array.isArray(fieldDescriptor.options.type)) {
-  //         if (Object.keys(fieldDescriptor.options.type[0]).length)
-  //           givenType = fieldDescriptor.options.type[0].schemaName || fieldDescriptor.options.type[0].type.schemaName
-  //       }
-  //       else {
-  //         if (Object.keys(fieldDescriptor.options.type).length)
-  //           givenType = fieldDescriptor.options.type.schemaName
-  //       }
-  //     }
-
-  //     if (givenType != 'Mixed')
-  //       this.logger.LogMixedType(modelName, fieldKey, field)
-  //   }
-
-  //   // if the field has a ref, we check if it is a string or a model
-  //   if (field.ref) {
-  //     const givenRef = field.ref
-  //     const isModel = typeof givenRef == 'function'
-
-  //     field.DBString = isModel ? givenRef.db._connectionString : this.baseDBString // we need to know which connection the ref model is from
-  //     field.ref = isModel ? givenRef.modelName : givenRef
-
-  //     // if the model is from another connection, we generate a schema descriptor for it, so we can later use it as ref
-  //     if (field.DBString != this.baseDBString) {
-  //       if (!this.schemas[field.DBString])
-  //         this.schemas[field.DBString] = {}
-  //       this.schemas[field.DBString][field.ref] = this.GenerateSchema(givenRef)
-  //     }
-  //   }
-
-  //   return field
-  // }
-
-  // /**
-  //  * Helper function, that is used when an image was uploaded.
-  //  * It will resize the image to the specified size if needed.
-  //  * It will create a RoboFile document for the image, with the properties of the image.
-  //  * It will also create a thumbnail of the image if needed.
-  //  * @param {object} req
-  //  * @param {object} res
-  //  */
-  // handleImageUpload(req, res) {
-  //   const multerPath = req.file.path
-  //   const type = req.file.mimetype
-  //   const extension = req.file.originalname.split('.').pop()
-  //   const filePath = `${req.file.filename}.${extension}` // the image will be saved with the extension attached
-
-  //   let newSize = req.file.size // this will be overwritten with the size after the resizing
-  //   this.resizeImageTo(multerPath, this.maxImageSize, `${multerPath}.${extension}`) // resizes and copies the image
-  //     .then((size) => {
-  //       if (size) // if 'this.maxImageSize' is set to null, then no resizing was done (and 'size' is undefined)
-  //         newSize = size
-
-  //       if (this.createThumbnail) // if a thumbnail is needed create one
-  //         return this.resizeImageTo(multerPath, this.maxThumbnailSize, `${multerPath}_thumbnail.${extension}`)
-  //     })
-  //     .then(() => fs.promises.unlink(multerPath)) // we don't need the original image anymore
-  //     .then(() => RoboFileModel.create({ // we create the RoboFile document
-  //       name: req.file.originalname,
-  //       path: filePath,
-  //       type,
-  //       size: newSize,
-  //       extension,
-  //       isImage: true,
-  //       ...this.createThumbnail && { thumbnailPath: `${req.file.filename}_thumbnail.${extension}` }, // A hacky way of only append thumbnailPath to an object, when createThumbnail is true
-  //     }))
-  //     .then(file => res.send(file))
-  //     .catch((err) => {
-  //       console.error(err)
-  //       res.status(500).send(err)
-  //     })
-  // }
-
-  // /**
-  //  * Resizes an image at the sourcePath to the given size and saves it to the destinationPath.
-  //  * @param {string} sourcePath
-  //  * @param {number} size
-  //  * @param {string} destinationPath
-  //  */
-  // resizeImageTo(sourcePath, size, destinationPath) {
-  //   if (size == null)
-  //     return fs.promises.copyFile(sourcePath, destinationPath) // if size is null, we do not resize just save it to the destination path
-
-  //   return new Promise((resolve, reject) => {
-  //     sharp(sourcePath)
-  //       .rotate()
-  //       .resize(size, size, {
-  //         fit: 'inside',
-  //         withoutEnlargement: true, // if the size was already smaller then specified, we do not enlarge it
-  //       })
-  //       .toFile(destinationPath, (err, info) => {
-  //         if (err)
-  //           reject(err)
-  //         else resolve(info.size)
-  //       })
-  //   })
-  // }
+    return RoboFileModel.create({
+      name: file.originalname,
+      path: filePath,
+      size: file.size,
+      extension,
+      type,
+    })
+  }
 
   // /**
   //  * Adds a middleware function to the given model.
@@ -1391,135 +1218,105 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     if (this.fileDir) {
       Router.use(
         '/static',
-        (req, res, next) => {
-          if (!this.fileReadMiddleware)
-            return next()
-
-          promisify(this.fileReadMiddleware(req))
-            .then(() => next())
-            .catch(reason => res.status(403).send(reason))
-        },
+        this.wrapExpressMiddleware(this.fileReadMiddleware),
         express.static(path.resolve(__dirname, this.fileDir), { maxAge: this.maxFileCacheAge }),
       )
       Router.use('/static', (req, res) => res.status(404).send('NOT FOUND')) // If a file is not found in FileDir, send back 404 NOT FOUND
 
       Router.post(
         '/fileupload',
-        (req, res, next) => {
-          if (!this.fileUploadMiddleware)
-            return next()
-
-          promisify(this.fileUploadMiddleware(req))
-            .then(() => next())
-            .catch(reason => res.status(403).send(reason))
-        },
-        this.upload.single('file'),
-        (req, res) => {
-          if (req.file.mimetype.startsWith('image'))
-            return this.handleImageUpload(req, res)
-
-          const multerPath = req.file.path
-          const type = req.file.mimetype
-          const extension = req.file.originalname.split('.').pop()
-          const filePath = `${req.file.filename}.${extension}` // the file will be saved with the extension attached
-
-          fs.renameSync(multerPath, `${multerPath}.${extension}`)
-
-          const fileData = {
-            name: req.file.originalname,
-            path: filePath,
-            size: req.file.size,
-            extension,
-            type,
+        this.wrapExpressMiddleware(this.fileUploadMiddleware),
+        this.upload!.single('file'),
+        async (req, res) => {
+          try {
+            const roboFile = req.file!.mimetype.startsWith('image') ?
+              await this.handleImageUpload(req.file!) :
+              await this.handleFileUpload(req.file!)
+  
+            return roboFile
           }
-
-          // we create the RoboFile document with the properties of the file
-          RoboFileModel.create(fileData, (err, file) => {
-            if (err)
-              res.status(500).send(err)
-            else res.send(file)
-          })
+          catch(err) {
+            res.status(500).send(err)
+          }
         },
       )
 
       Router.post(
         '/fileclone/:id',
-        (req, res, next) => {
-          if (!this.fileUploadMiddleware)
-            return next()
+        this.wrapExpressMiddleware(this.fileUploadMiddleware),
+        async (req, res) => {
+          try {
+            const roboFile = await RoboFileModel.findOne({ _id: req.params.id }).lean()
+            if(!roboFile)
+              throw new Error('UNKNOWN FILE')
 
-          promisify(this.fileUploadMiddleware(req))
-            .then(() => next())
-            .catch(reason => res.status(403).send(reason))
-        },
-        (req, res) => {
-          RoboFileModel.findOne({ _id: req.params.id }).lean()
-            .then((roboFile) => {
-              const realPath = path.resolve(this.fileDir, roboFile.path)
-              if (!realPath.startsWith(this.fileDir))
-                return Promise.reject('INVALID PATH')
+            const realPath = path.resolve(this.fileDir!, roboFile.path)
+            if (!realPath.startsWith(this.fileDir!))
+              throw new Error('INVALID PATH')
 
-              const copyRealPath = realPath.replace('.', '_copy.')
-              if (fs.existsSync(realPath))
-                fs.copyFileSync(realPath, copyRealPath)
+            const copyRealPath = realPath.replace('.', '_copy.')
+            if (fs.existsSync(realPath))
+              await fs.promises.copyFile(realPath, copyRealPath)
 
-              if (roboFile.thumbnailPath) {
-                const thumbnailPath = path.resolve(this.fileDir, roboFile.thumbnailPath)
-                if (!thumbnailPath.startsWith(this.fileDir))
-                  return Promise.reject('INVALID PATH')
+            if (roboFile.thumbnailPath) {
+              const thumbnailPath = path.resolve(this.fileDir!, roboFile.thumbnailPath)
+              if (!thumbnailPath.startsWith(this.fileDir!))
+                throw new Error('INVALID PATH')
 
-                const copyThumbnailPath = thumbnailPath.replace('.', '_copy.')
-                if (fs.existsSync(thumbnailPath))
-                  fs.copyFileSync(thumbnailPath, copyThumbnailPath)
-              }
+              const copyThumbnailPath = thumbnailPath.replace('.', '_copy.')
+              if (fs.existsSync(thumbnailPath))
+                await fs.promises.copyFile(thumbnailPath, copyThumbnailPath)
+            }
 
-              delete roboFile._id
-              roboFile.path = roboFile.path.replace('.', '_copy.')
-              roboFile.thumbnailPath = roboFile.thumbnailPath.replace('.', '_copy.')
+            const copy: Optional<RoboFile, '_id'> = {
+              ...roboFile,
+              path: roboFile.path.replace('.', '_copy.'),
+              thumbnailPath: roboFile.thumbnailPath.replace('.', '_copy.'),
+            }
+            delete copy._id
 
-              return RoboFileModel.create(roboFile)
-            })
-            .then(file => res.send(file))
-            .catch(err => res.status(500).send(err))
+            const file = await RoboFileModel.create(roboFile)
+            res.send(file)
+          }
+          catch(err) {
+            res.status(500).send(err)
+          }
         },
       )
 
       Router.delete(
         '/filedelete/:id',
-        (req, res, next) => {
-          if (!this.fileDeleteMiddleware)
-            return next()
+        this.wrapExpressMiddleware(this.fileDeleteMiddleware),
+        async (req, res) => {
+          try {
+            const file = await RoboFileModel.findOne({ _id: req.params.id }).lean()
+            if (!file)
+              throw new Error('UNKNOWN FILE')
 
-          promisify(this.fileDeleteMiddleware(req))
-            .then(() => next())
-            .catch(reason => res.status(403).send(reason))
-        },
-        (req, res) => {
-          RoboFileModel.findOne({ _id: req.params.id })
-            .then((file) => {
-              if (!file)
-                return Promise.reject('Unkown file')
+            // Remove the file
+            const realPath = path.resolve(this.fileDir!, file.path)
+            if (!realPath.startsWith(this.fileDir!))
+              throw new Error('INVALID PATH')
 
-              // we remove both the file and thumbnail if they exists
-              const realPath = path.resolve(this.fileDir, file.path)
-              if (!realPath.startsWith(this.fileDir))
-                return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
-              if (fs.existsSync(realPath))
-                fs.unlinkSync(realPath)
+            if (fs.existsSync(realPath))
+              await fs.promises.unlink(realPath)
 
-              if (file.thumbnailPath) {
-                const thumbnailPath = path.resolve(this.fileDir, file.thumbnailPath)
-                if (!thumbnailPath.startsWith(this.fileDir))
-                  return Promise.reject('INVALID PATH') // for safety, if the resolved path is outside of FileDir we return 500 INVALID PATH
-                if (fs.existsSync(thumbnailPath))
-                  fs.unlinkSync(thumbnailPath)
-              }
+            // Remove thumbnail
+            if (file.thumbnailPath) {
+              const thumbnailPath = path.resolve(this.fileDir!, file.thumbnailPath)
+              if (!thumbnailPath.startsWith(this.fileDir!))
+                throw new Error('INVALID PATH')
 
-              // we delete the RoboFile document
-              return RoboFileModel.deleteOne({ _id: file._id })
-            })
-            .then(() => res.send())
-            .catch(err => res.status(400).send(err))
+              if (fs.existsSync(thumbnailPath))
+                await fs.promises.unlink(thumbnailPath)
+            }
+
+            await RoboFileModel.deleteOne({ _id: file._id })
+            res.send()
+          }
+          catch(err) {
+            res.status(400).send(err)
+          }
         },
       )
     }
