@@ -31,7 +31,6 @@
     "build": "pnpm prepare && tsc --declaration"
   },
   "dependencies": {
-    "fuse.js": "^6.4.2",
     "glob": "^11.0.0",
     "mongoose": "^8.5.1",
     "multer": "^1.4.2",
@@ -39,7 +38,7 @@
     "typescript": "^5.5.3"
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^2.23.0",
+    "@antfu/eslint-config": "3.6.2",
     "@types/express": "^4.17.21",
     "@types/multer": "^1.4.11",
     "@types/node": "^20.4.2",

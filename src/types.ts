@@ -1,6 +1,6 @@
-import type mongoose from 'mongoose'
 import type { Request, Response } from 'express'
-import { ObjectId } from 'mongoose'
+import type mongoose from 'mongoose'
+import type { ObjectId } from 'mongoose'
 
 export type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>
 export type MaybePromise<T> = T | Promise<T>
@@ -14,12 +14,12 @@ export type OperationType = 'C' | 'R' | 'U' | 'D' | 'S'
 export type MiddlewareBeforeFunction = (req: Request, res: Response) => Promise<void>
 export type MiddlewareAfterFunction = (req: Request, res: Response, result: unknown) => Promise<void>
 export type SortValue = NonNullable<Parameters<mongoose.Query<unknown, unknown>['sort']>[0]>
-export type SortObject = {
+export interface SortObject {
   [key: string]: mongoose.SortOrder | {
-      $meta: any;
+    $meta: any
   }
 }
-export type FilterObject = {
+export interface FilterObject {
   $and?: FilterObject[]
   $or?: FilterObject[]
   [key: string]: unknown

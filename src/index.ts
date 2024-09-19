@@ -1,17 +1,16 @@
-import path from 'node:path'
+import type { Request, RequestHandler, Response, Router } from 'express'
+import type mongoose from 'mongoose'
+import type { RoboFile } from './mongooseTypes'
+import type { Accesses, AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, OperationType, Optional, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
 import fs from 'node:fs'
+import path from 'node:path'
 import express from 'express'
+import { glob } from 'glob'
 import multer from 'multer'
 import sharp from 'sharp'
-import type mongoose from 'mongoose'
-import type { Request, Response } from 'express'
-import { glob } from 'glob'
 import RoboFileModel from './schemas/roboFile'
 import Logger from './utils/logger'
 import MinimalSetCollection from './utils/minimalSetCollection'
-import type { Accesses, AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, OperationType, Optional, RoboField,  ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
-import type {RequestHandler, Router} from 'express'
-import { RoboFile } from './mongooseTypes'
 
 class MiddlewareError extends Error {
   constructor(public type: MiddlewareTiming, err: Error) {
@@ -92,6 +91,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   constructor({
     mongooseConnection,
+    schemaPathGlob,
     servicePathGlob = null,
     fileDir = null,
     maxFileCacheAge = 5000,
@@ -110,7 +110,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     showLogs = true,
   }: RobogoConfig<Namespace, AccessGroup>) {
     this.mongooseConnection = mongooseConnection
-    this.schemaPathGlob = this.schemaPathGlob
+    this.schemaPathGlob = schemaPathGlob
     this.servicePathGlob = servicePathGlob
     this.fileDir = fileDir
     this.maxFileCacheAge = maxFileCacheAge
@@ -146,7 +146,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   async init() {
     const roboModel = this.generateModel(RoboFileModel as mongoose.Model<unknown>)
     this.roboFileShema = this.generateSchema(roboModel)
-    
+
     await this.processSchemas()
     this.generateDecycledSchemas()
     this.generatePathSchemas()
@@ -163,12 +163,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         this.services[serviceName] = imported.default || imported
       }
     }
-
-    console.log('\n\n\n\n\n\n\n\n')
-    // console.log(this.models.Test)
-    // console.dir(this.decycledSchemas.Test, {depth: null})
-    // console.log(this.services)
-    console.log('\n\n\n\n\n\n\n\n')
   }
 
   /**
@@ -178,8 +172,8 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
    */
   async processSchemas() {
     for (const schemaPathGlob of await glob(this.schemaPathGlob)) {
-      const {default: mongooseModel}: {default: mongoose.Model<unknown>} = await import(schemaPathGlob)
-      
+      const { default: mongooseModel }: { default: mongoose.Model<unknown> } = await import(schemaPathGlob)
+
       this.models[mongooseModel.modelName] = this.generateModel(mongooseModel)
       this.schemas[mongooseModel.modelName] = this.generateSchema(this.models[mongooseModel.modelName])
       this.middlewares[mongooseModel.modelName] = {
@@ -303,13 +297,11 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         sortObj[entry] = 1
     }
 
-
     return sortObj
   }
 
   /** Generates a robogo schema instance from a mongoose model instance. */
   generateSchema(model: Model<Namespace, AccessGroup>) {
-    console.log(model.model.modelName)
     return Object.values(model.model.schema.paths)
       .filter(type => type.path !== '_id' && type.path !== '__v')
       .map(type => this.generateRoboField(model, model.model.schema, type))
@@ -325,17 +317,17 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       writeGuards: type.options.writeGuards || [],
     }
 
-    if(type.instance === 'Array')
+    if (type.instance === 'Array')
       roboField.isArray = true
 
     // these keys are only added if specified
     const optionKeys = ['required', 'name', 'description', 'enum', 'autopopulate', 'default', 'readGroups', 'writeGroups'] as const
-    for(const key of optionKeys) {
-      if(type.options.hasOwnProperty(key))
+    for (const key of optionKeys) {
+      if (type.options.hasOwnProperty(key))
         roboField[key] = type.options[key]
     }
 
-    if(type.options.hasOwnProperty('ref')) {
+    if (type.options.hasOwnProperty('ref')) {
       const isModelInstance = typeof type.options.ref === 'function'
       roboField.ref = isModelInstance ? type.options.ref.modelName : type.options.ref
     }
@@ -343,10 +335,10 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     this.addAdminGroups(roboField, model)
     this.validateGroups(roboField, model)
 
-    if(roboField.isArray)
+    if (roboField.isArray)
       this.addEmbeddedProperties(model, schema, roboField)
 
-    if(type.schema) {
+    if (type.schema) {
       roboField.type = 'Object'
       roboField.subfields = Object.values(type.schema.paths)
         .filter(type => type.path !== '_id')
@@ -358,7 +350,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   /** Extrancts and translates the mongoose schema type to a robogo type format */
   getRoboTypeFromSchemaType(type: mongoose.SchemaType): string {
-    switch(type.instance) {
+    switch (type.instance) {
       case 'ObjectID': return 'Object'
       case 'Mixed': return 'Object'
       case 'Embedded': return 'Object'
@@ -368,38 +360,38 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   addEmbeddedProperties(model: Model<Namespace, AccessGroup>, schema: mongoose.Schema, roboField: RoboField<AccessGroup>) {
     const embeddedType = schema.path(`${roboField.key}.$`)
-    if(!embeddedType)
+    if (!embeddedType)
       return
 
     const subField = this.generateRoboField(model, schema, embeddedType)
 
     roboField.type = subField.type
-    roboField.props = {...roboField.props, ...subField.props}
+    roboField.props = { ...roboField.props, ...subField.props }
     roboField.readGuards = [...roboField.readGuards, ...subField.readGuards]
     roboField.writeGuards = [...roboField.writeGuards, ...subField.writeGuards]
-    
+
     // add some properties if they do not exist
     const keysToCopy = ['name', 'description', 'ref', 'enum', 'default', 'autopopulate'] as const
-    for(const key of keysToCopy) {
-      if(subField[key] !== undefined)
+    for (const key of keysToCopy) {
+      if (subField[key] !== undefined)
         // @ts-expect-error this is ok
         roboField[key] ??= subField[key]
     }
 
     // merge or set read and write access groups
-    for(const groupType of Object.values(this.groupTypes)) {
-      if(subField[groupType]) {
-        if(roboField[groupType])
+    for (const groupType of Object.values(this.groupTypes)) {
+      if (subField[groupType]) {
+        if (roboField[groupType])
           roboField[groupType] = [...roboField[groupType]!, ...subField[groupType]!]
         else
           roboField[groupType] = subField[groupType]
       }
     }
   }
-  
+
   plugInFieldRef(field: RoboField<AccessGroup>, modelName: string) {
     if (field.ref) {
-      if (field.ref == 'RoboFile')
+      if (field.ref === 'RoboFile')
         field.subfields = this.roboFileShema // RoboFile is not stored in the "Schemas" object as it comes from this library not the user.
       else if (this.schemas[field.ref])
         field.subfields = this.schemas[field.ref] // If the ref is known as a schema, then the fields new subfields are the fields of that schema
@@ -420,15 +412,15 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
   /** Checks if 'field' is referencing a model, which was already referenced earlier in the tree and if so it removes the subfields */
   decycleField(field: RoboField<AccessGroup>, visitedRefs: string[] = []): RoboField<AccessGroup> {
-    const decycledField = {...field}
+    const decycledField = { ...field }
 
-    if(field.ref) {
-      if(visitedRefs.includes(field.ref))
+    if (field.ref) {
+      if (visitedRefs.includes(field.ref))
         decycledField.subfields = []
-    
+
       visitedRefs.push(field.ref)
     }
-    
+
     if (decycledField.subfields)
       decycledField.subfields = decycledField.subfields.map(f => this.decycleField(f, visitedRefs))
 
@@ -472,7 +464,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     const currReadGroups = (field.readGroups || []).map(a => [a])
     const currWriteGroups = (field.writeGroups || []).map(a => [a])
 
-    if (!field.subfields?.length || field.ref == 'RoboFile') { // if the field is a 'leaf' then we return our accesses
+    if (!field.subfields?.length || field.ref === 'RoboFile') { // if the field is a 'leaf' then we return our accesses
       return {
         read: currReadGroups,
         write: currWriteGroups,
@@ -558,35 +550,35 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       extension,
       isImage: true,
     }
-    if(this.createThumbnail)
+    if (this.createThumbnail)
       roboFileData.thumbnailPath = `${file.filename}_thumbnail.${extension}`
 
     return RoboFileModel.create(roboFileData)
   }
 
-    /**
-     * Resizes an image at the sourcePath to the given size and saves it to the destinationPath.
-     * @param {string} sourcePath
-     * @param {number} size
-     * @param {string} destinationPath
-     */
-    async resizeImageTo(sourcePath: string, size: number, destinationPath: string) {
-      if (size == null) { // if size is null, we do not resize just save it to the destination path
-        await fs.promises.copyFile(sourcePath, destinationPath)
-      }
-      else {
-        const newSize = await sharp(sourcePath)
-            .rotate()
-            .resize(size, size, {
-              fit: 'inside',
-              withoutEnlargement: true,
-            })
-            .toFile(destinationPath)
-            .then(info => info.size)
-
-        return newSize
-      }
+  /**
+   * Resizes an image at the sourcePath to the given size and saves it to the destinationPath.
+   * @param {string} sourcePath
+   * @param {number} size
+   * @param {string} destinationPath
+   */
+  async resizeImageTo(sourcePath: string, size: number, destinationPath: string) {
+    if (size == null) { // if size is null, we do not resize just save it to the destination path
+      await fs.promises.copyFile(sourcePath, destinationPath)
     }
+    else {
+      const newSize = await sharp(sourcePath)
+        .rotate()
+        .resize(size, size, {
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .toFile(destinationPath)
+        .then(info => info.size)
+
+      return newSize
+    }
+  }
 
   async handleFileUpload(file: Express.Multer.File) {
     const multerPath = file.path
@@ -632,12 +624,12 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   // }
 
   /** A helper function, that is a template for the CRUDS category routes. */
-  async CRUDSRoute<T>({req, res, operation, mainPart, responsePart}: {
-    req: Request,
-    res: Response,
+  async CRUDSRoute<T>({ req, res, operation, mainPart, responsePart }: {
+    req: Request
+    res: Response
     operation: OperationType
-    mainPart: () => Promise<T>,
-    responsePart: (result: T) => Promise<void>,
+    mainPart: () => Promise<T>
+    responsePart: (result: T) => Promise<void>
   }) {
     // if the model is unkown send an error
     if (!this.schemas[req.params.model]) {
@@ -651,7 +643,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     const middlewareFunctions = this.middlewares[req.params.model][operation]
     try {
       await middlewareFunctions.before.call(this, req, res)
-        .catch(err => {throw new MiddlewareError('before', err)})
+        .catch((err) => { throw new MiddlewareError('before', err) })
 
       const hasAccess = await this.hasModelAccess(req.params.model, mode, req)
       if (!hasAccess)
@@ -660,27 +652,27 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       const result = await mainPart.call(this)
 
       await middlewareFunctions.after.call(this, req, res, result)
-        .catch(err => {throw new MiddlewareError('after', err)})
+        .catch((err) => { throw new MiddlewareError('after', err) })
 
       await responsePart.call(this, result)
     }
-    catch(err) {
-      if(err instanceof MiddlewareError) {
+    catch (err) {
+      if (err instanceof MiddlewareError) {
         this.logger.logMiddlewareMessage(req.params.model, operation, err.type, err.message)
       }
       else {
         res.status(500).send(err)
         console.error(err)
       }
-    }    
+    }
   }
 
   async hasModelAccess(modelName: string, mode: AccessType, req: Request): Promise<boolean> {
-    if (mode == 'read' && !req.checkReadAccess)
+    if (mode === 'read' && !req.checkReadAccess)
       return true
-    if (mode == 'write' && !req.checkWriteAccess)
+    if (mode === 'write' && !req.checkWriteAccess)
       return true
-    
+
     const groupType = this.groupTypes[mode]
     if (!this.hasGroupAccess(this.models[modelName][groupType], req.accessGroups as AccessGroup[]))
       return false
@@ -701,7 +693,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Removes declined fields from an object. */
-  async removeDeclinedFieldsFromObject({object, mode, req, guardResults, ...params}: { 
+  async removeDeclinedFieldsFromObject({ object, mode, req, guardResults, ...params }: {
     object: Partial<MongooseDocument> | null
     mode: AccessType
     req: Request
@@ -731,9 +723,9 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     }
 
     const checkGroupAccess = !('modelName' in params) || !this.hasEveryNeededAccessGroup(params.modelName, mode, req.accessGroups as AccessGroup[])
-    guardResults = await this.calculateGuardResults({req, fields: fieldsInObj, mode, calculatedGuardResults: guardResults})
+    guardResults = await this.calculateGuardResults({ req, fields: fieldsInObj, mode, calculatedGuardResults: guardResults })
 
-    const promises = fieldsInObj.map(field => this.removeDeclinedFieldsFromObjectHelper({object, req, field, mode, checkGroupAccess, guardResults}))
+    const promises = fieldsInObj.map(field => this.removeDeclinedFieldsFromObjectHelper({ object, req, field, mode, checkGroupAccess, guardResults }))
     await Promise.all(promises)
   }
 
@@ -750,7 +742,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       delete object[field.key]
     }
     else if (field.subfields && (mode === 'read' || !field.ref)) { // we only recurse to the subobjects if reading, or when writing but the field is not a reference
-      const fieldsOrModel = field.ref ? {modelName: field.ref} : {fields: field.subfields}
+      const fieldsOrModel = field.ref ? { modelName: field.ref } : { fields: field.subfields }
 
       if (Array.isArray(object[field.key])) {
         const promises = (object[field.key] as Array<object>).map(obj => this.removeDeclinedFieldsFromObject({ ...fieldsOrModel, object: obj, mode, req, guardResults }))
@@ -768,8 +760,8 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Calculates a Map of every access guard function and their results, that appear on the given fields */
-  async calculateGuardResults({req, fields, mode, calculatedGuardResults = new Map()}: {
-    req: Request,
+  async calculateGuardResults({ req, fields, mode, calculatedGuardResults = new Map() }: {
+    req: Request
     fields: RoboField<AccessGroup>[]
     mode: AccessType
     calculatedGuardResults?: GuardResults
@@ -779,7 +771,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     const newGuards = new Set<GuardFunction>()
     for (const field of fields) {
       for (const guard of field[guardType]) {
-        if(!calculatedGuardResults.has(guard)) {
+        if (!calculatedGuardResults.has(guard)) {
           newGuards.add(guard)
         }
       }
@@ -791,7 +783,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     const newResults = new Map<GuardFunction, boolean>()
     for (const guard of newGuards) {
       const result = res.shift()!
-      const guardValue = result.status == 'fulfilled' && result.value
+      const guardValue = result.status === 'fulfilled' && result.value
 
       newResults.set(guard, guardValue)
     }
@@ -807,7 +799,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     checkGroupAccess?: boolean
     guardResults?: null | GuardResults
   }): Promise<boolean> {
-    const shouldCheckAccess = mode == 'read' ? req.checkReadAccess : req.checkWriteAccess
+    const shouldCheckAccess = mode === 'read' ? req.checkReadAccess : req.checkWriteAccess
     if (!shouldCheckAccess)
       return false
 
@@ -825,7 +817,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     req: Request,
     field: RoboField<AccessGroup>,
     mode: AccessType,
-    guardResults: null | GuardResults = null
+    guardResults: null | GuardResults = null,
   ): Promise<boolean> {
     const guardType = this.guardTypes[mode]
     if (!field[guardType].length)
@@ -844,9 +836,9 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Removes every field that are not readable/writeable with the provided request in every document. */
-  async removeDeclinedFields({documents, mode, req, ...params}: {
-    documents: MongooseDocument[],
-    mode: AccessType,
+  async removeDeclinedFields({ documents, mode, req, ...params }: {
+    documents: MongooseDocument[]
+    mode: AccessType
     req: Request
   } & ({
     fields: RoboField<AccessGroup>[]
@@ -854,7 +846,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     modelName: string
   })) {
     const fields = 'fields' in params ? params.fields : this.schemas[params.modelName]
-    const guardResults = await this.calculateGuardResults({req, fields, mode})
+    const guardResults = await this.calculateGuardResults({ req, fields, mode })
 
     const promises = documents.map(doc => this.removeDeclinedFieldsFromObject({ ...params, object: doc, mode, req, guardResults }))
     await Promise.all(promises)
@@ -892,15 +884,15 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         const isDeclined = await this.isFieldDeclined({ req, field: this.pathSchemas[req.params.model][path], mode: 'read' })
 
         if (isDeclined)
-          return Promise.reject()
+          throw new Error('declined')
         else
           return value
       },
-      groupVisitor: (results) => {
+      groupVisitor: async (results) => {
         const conditions = results.filter(result => Object.keys(result).length)
 
         if (!conditions.length)
-          return Promise.reject()
+          throw new Error('empty')
         else
           return conditions
       },
@@ -922,7 +914,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         continue
       }
 
-      if (outerKey == '$and' || outerKey == '$or') {
+      if (outerKey === '$and' || outerKey === '$or') {
         const conditionPromises = filter[outerKey]!.map(condition => this.visitFilter({ filter: condition, groupVisitor, conditionVisitor }))
         const conditions = await Promise.all(conditionPromises)
 
@@ -979,15 +971,15 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
     // then we check the fields
     const fieldAccesses: Accesses['fields'] = {}
-    const promises = this.accessTypes.map(async mode => {
-      if(!modelAccesses[mode])
+    const promises = this.accessTypes.map(async (mode) => {
+      if (!modelAccesses[mode])
         return
-  
+
       const [skipGroupAccessCheck, guardResults] = await Promise.all([
         this.hasEveryNeededAccessGroup(modelName, mode, req.accessGroups as AccessGroup[]),
-        this.calculateGuardResults({req, fields: this.schemas[modelName], mode})
+        this.calculateGuardResults({ req, fields: this.schemas[modelName], mode }),
       ])
-  
+
       const promises = this.schemas[modelName].map(field => this.addFieldAccesses({ accesses: fieldAccesses, mode, field, req, checkGroupAccess: !skipGroupAccessCheck, guardResults }))
       await Promise.all(promises)
     })
@@ -1001,7 +993,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         ...modelAccesses,
         create: canWriteModel && canWriteAllRequiredFields,
       },
-      fields: fieldAccesses
+      fields: fieldAccesses,
     }
   }
 
@@ -1015,17 +1007,17 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     prefix?: string
   }) {
     const isDeclined = await this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardResults })
-    if(isDeclined)
+    if (isDeclined)
       return
 
     const absolutePath = prefix + field.key
-    if(!accesses[absolutePath])
+    if (!accesses[absolutePath])
       accesses[absolutePath] = {}
 
     accesses[absolutePath][mode] = true
 
     if (field.subfields && !field.ref) {
-      const subGuardResults = await this.calculateGuardResults({req, fields: field.subfields, mode, calculatedGuardResults: guardResults})
+      const subGuardResults = await this.calculateGuardResults({ req, fields: field.subfields, mode, calculatedGuardResults: guardResults })
       const promises = field.subfields.map(f => this.addFieldAccesses({ mode, field: f, req, checkGroupAccess, guardResults: subGuardResults, accesses, prefix: `${absolutePath}.` }))
       await Promise.all(promises)
     }
@@ -1048,7 +1040,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Removes every fields that cannot be read/written by the provided request. The fields parameter should always be a 'decycledSchema'. */
-  async removeDeclinedFieldsFromSchema({fields, req, mode, modelName, guardResults}: {
+  async removeDeclinedFieldsFromSchema({ fields, req, mode, modelName, guardResults }: {
     fields: RoboField<AccessGroup>[]
     mode: AccessType
     req: Request
@@ -1059,14 +1051,14 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       return fields
 
     const checkGroupAccess = !modelName || !this.hasEveryNeededAccessGroup(modelName, mode, req.accessGroups as AccessGroup[])
-    guardResults = await this.calculateGuardResults({req, fields, mode, calculatedGuardResults: guardResults})
+    guardResults = await this.calculateGuardResults({ req, fields, mode, calculatedGuardResults: guardResults })
 
     const notDeclinedFields = await asyncFilter(fields, field => this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardResults }))
-    const promises = notDeclinedFields.map(async field => {
-      const fieldCopy = {...field}
+    const promises = notDeclinedFields.map(async (field) => {
+      const fieldCopy = { ...field }
 
-      if(fieldCopy.subfields)
-        fieldCopy.subfields = await this.removeDeclinedFieldsFromSchema({fields: fieldCopy.subfields, req, mode, guardResults, modelName: field.ref}) // IMPROVEMENT: we should pass the field.ref to the recursion, so it can optimize more, but it should be passed alongside the fields so we don't get into a infinite loop.
+      if (fieldCopy.subfields)
+        fieldCopy.subfields = await this.removeDeclinedFieldsFromSchema({ fields: fieldCopy.subfields, req, mode, guardResults, modelName: field.ref }) // IMPROVEMENT: we should pass the field.ref to the recursion, so it can optimize more, but it should be passed alongside the fields so we don't get into a infinite loop.
 
       return fieldCopy
     })
@@ -1100,13 +1092,13 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         mainPart: async () => {
           if (req.checkWriteAccess)
             await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: req.body, mode: 'write', req })
-  
+
           return this.mongooseConnection.model(req.params.model).create(req.body)
         },
-        responsePart: async result => {
+        responsePart: async (result) => {
           if (req.checkReadAccess)
-            await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: result.toObject(), mode: 'read', req }) // .toObject() is needed, because create returns an immutable object by default 
-  
+            await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: result.toObject(), mode: 'read', req }) // .toObject() is needed, because create returns an immutable object by default
+
           res.send(result)
         },
       })
@@ -1122,10 +1114,10 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         operation: 'R',
         mainPart: async () => {
           const [filter, sort] = await Promise.all([
-              this.processFilter(req),
-              this.processSort(req)
+            this.processFilter(req),
+            this.processSort(req),
           ])
-  
+
           return this.mongooseConnection.model(req.params.model)
             .find(filter, req.query.projection)
             .sort(sort)
@@ -1133,12 +1125,12 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
             .limit(Number(req.query.limit) || Infinity)
             .lean({ autopopulate: true, virtuals: true, getters: true })
         },
-        responsePart: async results => {
+        responsePart: async (results) => {
           if (req.checkReadAccess)
-            await this.removeDeclinedFields({modelName: req.params.model, documents: results as MongooseDocument[], mode: 'read', req})
-  
+            await this.removeDeclinedFields({ modelName: req.params.model, documents: results as MongooseDocument[], mode: 'read', req })
+
           res.send(results)
-        }
+        },
       })
     })
 
@@ -1152,12 +1144,12 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
             .findOne({ _id: req.params.id }, req.query.projection)
             .lean({ autopopulate: true, virtuals: true, getters: true })
         },
-        responsePart: async result => {
+        responsePart: async (result) => {
           if (req.checkReadAccess)
             await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: result as MongooseDocument | null, mode: 'read', req })
-  
+
           res.send(result)
-        }
+        },
       })
     })
     // ----------------
@@ -1171,13 +1163,13 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         mainPart: async () => {
           if (req.checkWriteAccess)
             await this.removeDeclinedFieldsFromObject({ modelName: req.params.model, object: req.body, mode: 'write', req })
-  
+
           return this.mongooseConnection.model(req.params.model)
             .updateOne({ _id: req.body._id }, req.body)
         },
-        responsePart: async result => {
+        responsePart: async (result) => {
           res.send(result)
-        }
+        },
       })
     })
     // ----------------
@@ -1192,14 +1184,14 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
           const accesses = await this.getAccesses(req.params.model, req)
 
           if (!accesses.model.write || Object.values(accesses.fields).some(({ write }) => !write))
-            return Promise.reject('FORBIDDEN')
-  
+            throw new Error('FORBIDDEN')
+
           return this.mongooseConnection.model(req.params.model)
             .deleteOne({ _id: req.params.id })
         },
-        responsePart: async result => {
+        responsePart: async (result) => {
           res.send(result)
-        }
+        },
       })
     })
     // ----------------
@@ -1229,13 +1221,13 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         this.upload!.single('file'),
         async (req, res) => {
           try {
-            const roboFile = req.file!.mimetype.startsWith('image') ?
-              await this.handleImageUpload(req.file!) :
-              await this.handleFileUpload(req.file!)
-  
+            const roboFile = req.file!.mimetype.startsWith('image')
+              ? await this.handleImageUpload(req.file!)
+              : await this.handleFileUpload(req.file!)
+
             return roboFile
           }
-          catch(err) {
+          catch (err) {
             res.status(500).send(err)
           }
         },
@@ -1247,7 +1239,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         async (req, res) => {
           try {
             const roboFile = await RoboFileModel.findOne({ _id: req.params.id }).lean<RoboFile>()
-            if(!roboFile)
+            if (!roboFile)
               throw new Error('UNKNOWN FILE')
 
             const realPath = path.resolve(this.fileDir!, roboFile.path)
@@ -1268,7 +1260,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
                 await fs.promises.copyFile(thumbnailPath, copyThumbnailPath)
             }
 
-            const copy: Optional<RoboFile, '_id'> = {...roboFile}
+            const copy: Optional<RoboFile, '_id'> = { ...roboFile }
             delete copy._id
             copy.path = roboFile.path.replace('.', '_copy.')
             if (roboFile.thumbnailPath)
@@ -1277,7 +1269,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
             const file = await RoboFileModel.create(roboFile)
             res.send(file)
           }
-          catch(err) {
+          catch (err) {
             res.status(500).send(err)
           }
         },
@@ -1313,7 +1305,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
             await RoboFileModel.deleteOne({ _id: file._id })
             res.send()
           }
-          catch(err) {
+          catch (err) {
             res.status(400).send(err)
           }
         },
@@ -1328,12 +1320,12 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         res,
         operation: 'S',
         mainPart: () => this.hasModelAccess(req.params.model, 'read', req),
-        responsePart: async hasAccess => {
+        responsePart: async (hasAccess) => {
           if (!req.checkReadAccess || hasAccess)
             res.send({ ...this.models[req.params.model], model: req.params.model })
           else
             res.status(403).send()
-        }
+        },
       })
     })
 
@@ -1365,10 +1357,10 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         res,
         operation: 'S',
         mainPart: async () => this.decycledSchemas[req.params.model],
-        responsePart: async fields => {
+        responsePart: async (fields) => {
           if (req.checkReadAccess)
-            fields = await this.removeDeclinedFieldsFromSchema({fields, req, mode: 'read', modelName: req.params.model})
-  
+            fields = await this.removeDeclinedFieldsFromSchema({ fields, req, mode: 'read', modelName: req.params.model })
+
           res.send(fields)
         },
       })
@@ -1381,11 +1373,11 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         operation: 'S',
         mainPart: async () => {
           const filter = await this.processFilter(req)
-  
+
           return this.mongooseConnection.model(req.params.model)
             .countDocuments(filter)
         },
-        responsePart: async result => {
+        responsePart: async (result) => {
           res.send(String(result))
         },
       })
@@ -1402,7 +1394,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         res.send(accesses)
       }
       catch (err) {
-        res.status(500).send()
+        res.status(500).send(err)
       }
     })
 
@@ -1410,7 +1402,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 }
 
-function promisify<T>(value: T): Promise<Awaited<T>>  {
+function promisify<T>(value: T): Promise<Awaited<T>> {
   if (value instanceof Promise)
     return value
   else
