@@ -10,10 +10,8 @@ import RoboFileModel from './schemas/roboFile'
 import Logger from './utils/logger'
 import MinimalSetCollection from './utils/minimalSetCollection'
 import type { Accesses, AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, OperationType, Optional, RoboField,  ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
-import type {RequestHandler} from 'express'
-import { RoboFile } from './mongooseTypes/mongoose.gen'
-
-const Router = express.Router()
+import type {RequestHandler, Router} from 'express'
+import { RoboFile } from './mongooseTypes'
 
 class MiddlewareError extends Error {
   constructor(public type: MiddlewareTiming, err: Error) {
@@ -552,7 +550,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
     await fs.promises.unlink(multerPath)
 
-    const roboFileData: Omit<RoboFile, '_id'> = { // TODO: give type
+    const roboFileData: Omit<RoboFile, '_id'> = {
       name: file.originalname,
       path: filePath,
       type,
@@ -1077,8 +1075,10 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
   }
 
   /** Generates all the routes of robogo and returns the express router. */
-  generateRoutes() {
-    Router.use((req, res, next) => {
+  generateRoutes(): Router {
+    const router = express.Router()
+
+    router.use((req, res, next) => {
       if (req.accessGroups === undefined)
         req.accessGroups = []
 
@@ -1092,7 +1092,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     })
 
     // CREATE routes
-    Router.post('/create/:model', (req, res) => {
+    router.post('/create/:model', (req, res) => {
       this.CRUDSRoute({
         req,
         res,
@@ -1115,7 +1115,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
 
     // READ routes
     // these routes will use "lean" so that results are not immutable
-    Router.get('/read/:model', (req, res) => {
+    router.get('/read/:model', (req, res) => {
       this.CRUDSRoute({
         req,
         res,
@@ -1142,7 +1142,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       })
     })
 
-    Router.get('/get/:model/:id', (req, res) => {
+    router.get('/get/:model/:id', (req, res) => {
       this.CRUDSRoute({
         req,
         res,
@@ -1163,7 +1163,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     // ----------------
 
     // UPDATE routes
-    Router.patch('/update/:model', (req, res) => {
+    router.patch('/update/:model', (req, res) => {
       this.CRUDSRoute({
         req,
         res,
@@ -1183,7 +1183,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     // ----------------
 
     // DELETE routes
-    Router.delete('/delete/:model/:id', (req, res) => {
+    router.delete('/delete/:model/:id', (req, res) => {
       this.CRUDSRoute({
         req,
         res,
@@ -1205,25 +1205,25 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     // ----------------
 
     // SERVICE routes
-    Router.post('/runner/:service/:fun', (req, res) => {
+    router.post('/runner/:service/:fun', (req, res) => {
       this.serviceRoute(req, res, 'body')
     })
 
-    Router.get('/getter/:service/:fun', (req, res) => {
+    router.get('/getter/:service/:fun', (req, res) => {
       this.serviceRoute(req, res, 'query')
     })
     // ----------------
 
     // FILE routes
     if (this.fileDir) {
-      Router.use(
+      router.use(
         '/static',
         this.wrapExpressMiddleware(this.fileReadMiddleware),
         express.static(path.resolve(__dirname, this.fileDir), { maxAge: this.maxFileCacheAge }),
       )
-      Router.use('/static', (req, res) => res.status(404).send('NOT FOUND')) // If a file is not found in FileDir, send back 404 NOT FOUND
+      router.use('/static', (req, res) => res.status(404).send('NOT FOUND')) // If a file is not found in FileDir, send back 404 NOT FOUND
 
-      Router.post(
+      router.post(
         '/fileupload',
         this.wrapExpressMiddleware(this.fileUploadMiddleware),
         this.upload!.single('file'),
@@ -1241,12 +1241,12 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         },
       )
 
-      Router.post(
+      router.post(
         '/fileclone/:id',
         this.wrapExpressMiddleware(this.fileUploadMiddleware),
         async (req, res) => {
           try {
-            const roboFile = await RoboFileModel.findOne({ _id: req.params.id }).lean()
+            const roboFile = await RoboFileModel.findOne({ _id: req.params.id }).lean<RoboFile>()
             if(!roboFile)
               throw new Error('UNKNOWN FILE')
 
@@ -1268,12 +1268,11 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
                 await fs.promises.copyFile(thumbnailPath, copyThumbnailPath)
             }
 
-            const copy: Optional<RoboFile, '_id'> = {
-              ...roboFile,
-              path: roboFile.path.replace('.', '_copy.'),
-              thumbnailPath: roboFile.thumbnailPath.replace('.', '_copy.'),
-            }
+            const copy: Optional<RoboFile, '_id'> = {...roboFile}
             delete copy._id
+            copy.path = roboFile.path.replace('.', '_copy.')
+            if (roboFile.thumbnailPath)
+              copy.thumbnailPath = roboFile.thumbnailPath.replace('.', '_copy.')
 
             const file = await RoboFileModel.create(roboFile)
             res.send(file)
@@ -1284,7 +1283,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         },
       )
 
-      Router.delete(
+      router.delete(
         '/filedelete/:id',
         this.wrapExpressMiddleware(this.fileDeleteMiddleware),
         async (req, res) => {
@@ -1323,7 +1322,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     // --------------
 
     // SPECIAL routes
-    Router.get('/model/:model', (req, res) => {
+    router.get('/model/:model', (req, res) => {
       this.CRUDSRoute({
         req,
         res,
@@ -1338,7 +1337,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       })
     })
 
-    Router.get('/model', (req, res) => {
+    router.get('/model', (req, res) => {
       const promises = []
       for (const modelName in this.models) {
         const promise = this.hasModelAccess(modelName, 'read', req)
@@ -1360,7 +1359,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         })
     })
 
-    Router.get('/fields/:model', (req, res) => {
+    router.get('/fields/:model', (req, res) => {
       this.CRUDSRoute({
         req,
         res,
@@ -1375,7 +1374,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       })
     })
 
-    Router.get('/count/:model', (req, res) => {
+    router.get('/count/:model', (req, res) => {
       this.CRUDSRoute({
         req,
         res,
@@ -1392,12 +1391,12 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       })
     })
 
-    Router.get('/accessesGroups', (req, res) => {
+    router.get('/accessesGroups', (req, res) => {
       const result = Object.keys(this.accessGroups)
       res.send(result)
     })
 
-    Router.get('/accesses/:model', async (req, res) => {
+    router.get('/accesses/:model', async (req, res) => {
       try {
         const accesses = await this.getAccesses(req.params.model, req)
         res.send(accesses)
@@ -1407,7 +1406,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       }
     })
 
-    return Router
+    return router
   }
 }
 
