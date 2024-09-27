@@ -1,6 +1,6 @@
 /* eslint-disable no-console */
 
-import type { MiddlewareTiming, RoboField } from '../types'
+import type { MiddlewareTiming, RoboField } from '../types.js'
 
 interface ConstructorParams {
   showErrors: boolean
@@ -141,7 +141,6 @@ Timing should be one of:
 
     this.logMessage('error', occurrence, title, description)
   }
-
 
   logMiddlewareMessage(modelName: string, operation: string, timing: MiddlewareTiming, message: string) {
     const occurrence = `running the custom '${modelName} -> ${operation} -> ${timing}' middleware`

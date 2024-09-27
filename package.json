@@ -1,5 +1,6 @@
 {
   "name": "robogo",
+  "type": "module",
   "version": "0.5.11",
   "description": "a backend multitool for projects using MongoDB, Mongoose and Express",
   "author": "horvbalint",
@@ -28,7 +29,7 @@
   "scripts": {
     "postinstall": "pnpm prepare",
     "prepare": "mtgen ./src/schemas/*.ts -o ./src/mongooseTypes.ts",
-    "build": "pnpm prepare && tsc --declaration"
+    "build": "tsc --declaration"
   },
   "dependencies": {
     "glob": "^11.0.0",
