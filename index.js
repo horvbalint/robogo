@@ -1662,14 +1662,14 @@ class Robogo {
       res.send(result)
     })
 
-    Router.get( '/accesses/:model', async (req, res) => {
-      try {
-        const accesses = await this.getAccesses(req.params.model, req)
-        res.send(accesses)
+    Router.get( '/accesses/:model', (req, res) => {
+      async function mainPart(req, res) {
+        return await this.getAccesses(req.params.model, req)
       }
-      catch(err) {
-        res.status(500).send()
+      async function responsePart(req, res, result) {
+        res.send(result)
       }
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
     })
 
     return Router
