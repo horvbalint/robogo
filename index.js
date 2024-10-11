@@ -767,7 +767,7 @@ class Robogo {
    * @param {Function} responsePart
    * @param {String} operation
    */
-  CRUDSRoute(req, res, mainPart, responsePart, operation) {
+  CRUDSRoute(req, res, mainPart, responsePart, operation, denyIfNoModelAccess = true) {
     // if the model is unkown send an error
     if(!this.Schemas[this.BaseDBString][req.params.model]) {
       this.Logger.LogMissingModel(req.params.model, `serving the route: '${req.method} ${req.path}'`)
@@ -787,7 +787,7 @@ class Robogo {
       .then( () => {
         this.HasModelAccess(req.params.model, mode, req)
           .then( hasAccess => {
-            if(!hasAccess) return res.status(403).send()
+            if(denyIfNoModelAccess && !hasAccess) return res.status(403).send()
 
             mainPart.call(this, req, res)
               .then( result => {
@@ -1669,7 +1669,7 @@ class Robogo {
       async function responsePart(req, res, result) {
         res.send(result)
       }
-      this.CRUDSRoute(req, res, mainPart, responsePart, 'S')
+      this.CRUDSRoute(req, res, mainPart, responsePart, 'S', false)
     })
 
     return Router
