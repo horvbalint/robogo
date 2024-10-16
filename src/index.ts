@@ -171,8 +171,8 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
    * Finally it handles the references between the schemas.
    */
   async processSchemas() {
-    for (const schemaPathGlob of await glob(this.schemaPathGlob)) {
-      const { default: mongooseModel }: { default: mongoose.Model<unknown> } = await import(schemaPathGlob)
+    for (const schemaPath of await glob(this.schemaPathGlob)) {
+      const { default: mongooseModel }: { default: mongoose.Model<unknown> } = await import(schemaPath)
 
       this.models[mongooseModel.modelName] = this.generateModel(mongooseModel)
       this.schemas[mongooseModel.modelName] = this.generateSchema(this.models[mongooseModel.modelName])
@@ -1304,6 +1304,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
     })
 
     router.get('/model', (req, res) => {
+      console.log(this.models)
       const promises = []
       for (const modelName in this.models) {
         const promise = this.hasModelAccess(modelName, 'read', req)
@@ -1315,12 +1316,13 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
           const models = []
 
           for (const modelName in this.models) {
-            if (req.checkReadAccess && !results.shift())
-              continue
+            // if (req.checkReadAccess && !results.shift())
+            //   continue
 
             models.push({ ...this.models[modelName], model: modelName })
           }
 
+          console.log({ models })
           res.send(models)
         })
     })
