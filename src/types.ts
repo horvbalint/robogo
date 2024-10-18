@@ -19,15 +19,11 @@ export interface SortObject {
     $meta: any
   }
 }
-export interface FilterObject {
-  $and?: FilterObject[]
-  $or?: FilterObject[]
-  [key: string]: unknown
-}
 export interface MongooseDocument {
   _id: ObjectId
   [key: string]: unknown
 }
+export type FilterObject = mongoose.FilterQuery<MongooseDocument>
 
 export interface WithAccessGroups<AccessGroup extends string> {
   /** A list of access groups of which one is needed to read the content */
@@ -36,7 +32,7 @@ export interface WithAccessGroups<AccessGroup extends string> {
   writeGroups?: AccessGroup[]
 }
 
-export interface FieldProps {}
+export type FieldProps = any
 
 export interface RoboField<AccessGroup extends string = string> extends WithAccessGroups<AccessGroup> {
   /** The key of the field */

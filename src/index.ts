@@ -1,16 +1,16 @@
 import type { Request, RequestHandler, Response, Router } from 'express'
 import type mongoose from 'mongoose'
-import type { RoboFile } from './mongooseTypes'
-import type { Accesses, AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, OperationType, Optional, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types'
+import type { RoboFile } from './mongooseTypes.js'
+import type { Accesses, AccessType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, OperationType, Optional, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import express from 'express'
 import { glob } from 'glob'
 import multer from 'multer'
 import sharp from 'sharp'
-import RoboFileModel from './schemas/roboFile'
-import Logger from './utils/logger'
-import MinimalSetCollection from './utils/minimalSetCollection'
+import RoboFileModel from './schemas/roboFile.js'
+import Logger from './utils/logger.js'
+import MinimalSetCollection from './utils/minimalSetCollection.js'
 
 class MiddlewareError extends Error {
   constructor(public type: MiddlewareTiming, err: Error) {
@@ -25,7 +25,7 @@ interface RobogoConfig<Namespace extends string, AccessGroup extends string> {
   schemaPathGlob: string
   /** Glob pattern to the service files (eg.: './services/*.ts')  */
   servicePathGlob?: string | null
-  /** Path to the directory in which robogo should store the uploaded files */
+  /** Absolute path to the directory in which robogo should store the uploaded files */
   fileDir?: string | null
   /** The time in milliseconds until if the same file is requested another time, it can be served from the cache memory */
   maxFileCacheAge?: number
@@ -67,7 +67,7 @@ export default interface Robogo<Namespace extends string, AccessGroup extends st
   > {}
 
 // eslint-disable-next-line ts/no-unsafe-declaration-merging
-export default class Robogo<Namespace extends string, AccessGroup extends string> {
+export default class Robogo<Namespace extends string = string, AccessGroup extends string = string> {
   public models: Record<string, Model<Namespace, AccessGroup>> = {}
   /** A tree like structure of the fields of the models */
   public schemas: Record<string, RoboField<AccessGroup>[]> = {}
@@ -671,7 +671,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     object: Partial<MongooseDocument> | null
     mode: AccessType
     req: Request
-    guardResults?: GuardResults // TODO: why not in use?
+    guardResults?: GuardResults
   } & ({
     fields: RoboField<AccessGroup>[]
   } | {
@@ -715,7 +715,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     if (declined) {
       delete object[field.key]
     }
-    else if (field.subfields && (mode === 'read' || !field.ref)) { // we only recurse to the subobjects if reading, or when writing but the field is not a reference
+    else if (field.ref !== 'RoboFile' && field.subfields && (mode === 'read' || !field.ref)) { // we only recurse to the subobjects if reading, or when writing but the field is not a reference
       const fieldsOrModel = field.ref ? { modelName: field.ref } : { fields: field.subfields }
 
       if (Array.isArray(object[field.key])) {
@@ -1185,7 +1185,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       router.use(
         '/static',
         this.wrapExpressMiddleware(this.fileReadMiddleware),
-        express.static(path.resolve(__dirname, this.fileDir), { maxAge: this.maxFileCacheAge }),
+        express.static(this.fileDir, { maxAge: this.maxFileCacheAge }),
       )
       router.use('/static', (req, res) => {
         res.status(404).send('NOT FOUND')
@@ -1377,9 +1377,9 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     return router
   }
 
-  public addMiddleware(modelName: string, operation: OperationType, timing: 'before', middlewareFunction: MiddlewareBeforeFunction): void
-  public addMiddleware(modelName: string, operation: OperationType, timing: 'after', middlewareFunction: MiddlewareAfterFunction): void
-  public addMiddleware(modelName: string, operation: OperationType, timing: MiddlewareTiming, middlewareFunction: MiddlewareAfterFunction | MiddlewareBeforeFunction) {
+  addMiddleware(modelName: string, operation: OperationType, timing: 'before', middlewareFunction: MiddlewareBeforeFunction): void
+  addMiddleware(modelName: string, operation: OperationType, timing: 'after', middlewareFunction: MiddlewareAfterFunction): void
+  addMiddleware(modelName: string, operation: OperationType, timing: MiddlewareTiming, middlewareFunction: MiddlewareAfterFunction | MiddlewareBeforeFunction) {
     const errorOccurrence = `adding the custom middleware '${modelName} -> ${operation} -> ${timing}'`
 
     if (!this.middlewares[modelName]) {
@@ -1395,8 +1395,8 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
       throw new Error(`Middleware: Timing should be one of: ${this.timings}`)
     }
 
-    // @ts-expect-error - The two function overloads are ensuring the correct types
-    this.middlewares[modelName][operation][timing] = middlewareFunction as MiddlewareAfterFunction
+    // @ts-expect-error The funtion overload ensures the correct types
+    this.middlewares[modelName][operation][timing] = middlewareFunction
   }
 }
 
