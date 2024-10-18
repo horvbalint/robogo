@@ -12,6 +12,8 @@ import RoboFileModel from './schemas/roboFile.js'
 import Logger from './utils/logger.js'
 import MinimalSetCollection from './utils/minimalSetCollection.js'
 
+export * from './mongooseTypes.js'
+
 class MiddlewareError extends Error {
   constructor(public type: MiddlewareTiming, err: Error) {
     super(type, { cause: err })
@@ -730,7 +732,10 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
 
   /** Checks if there is minimal required access groups set for the model, of which every group is in the requests access groups */
   hasEveryNeededAccessGroup(modelName: string, mode: AccessType, accessGroups: AccessGroup[]) {
-    return this.models[modelName].minimalRequriedAccessGroupSets![mode].some(as => as.every(ag => accessGroups.includes(ag)))
+    if (!this.models[modelName].minimalRequriedAccessGroupSets![mode].length)
+      return true
+    else
+      return this.models[modelName].minimalRequriedAccessGroupSets![mode].some(as => as.every(ag => accessGroups.includes(ag)))
   }
 
   /** Calculates a Map of every access guard function and their results, that appear on the given fields */
@@ -1027,7 +1032,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
     const checkGroupAccess = !modelName || !this.hasEveryNeededAccessGroup(modelName, mode, req.accessGroups as AccessGroup[])
     guardResults = await this.calculateGuardResults({ req, fields, mode, calculatedGuardResults: guardResults })
 
-    const notDeclinedFields = await asyncFilter(fields, field => this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardResults }))
+    const notDeclinedFields = await asyncFilter(fields, async field => !await this.isFieldDeclined({ req, field, mode, checkGroupAccess, guardResults }))
     const promises = notDeclinedFields.map(async (field) => {
       const fieldCopy = { ...field }
 
