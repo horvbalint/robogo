@@ -597,32 +597,6 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     })
   }
 
-  // /**
-  //  * Adds a middleware function to the given model.
-  //  * @param {string} modelName
-  //  * @param {string} operation
-  //  * @param {string} timing
-  //  * @param {Function} middlewareFunction
-  //  */
-  // addMiddleware(modelName, operation, timing, middlewareFunction) {
-  //   const errorOccurrence = `adding the custom middleware '${modelName} -> ${operation} -> ${timing}'`
-
-  //   if (!this.middlewares[modelName]) {
-  //     this.logger.LogMissingModel(modelName, errorOccurrence)
-  //     throw new Error(`MISSING MODEL: ${modelName}`)
-  //   }
-  //   if (!this.operations.includes(operation)) {
-  //     this.logger.LogUnknownOperation(operation, errorOccurrence)
-  //     throw new Error(`Middleware: Operation should be one of: ${this.operations}`)
-  //   }
-  //   if (!this.timings.includes(timing)) {
-  //     this.logger.LogUnknownTiming(timing, errorOccurrence)
-  //     throw new Error(`Middleware: Timing should be one of: ${this.timings}`)
-  //   }
-
-  //   this.middlewares[modelName][operation][timing] = middlewareFunction
-  // }
-
   /** A helper function, that is a template for the CRUDS category routes. */
   async CRUDSRoute<T>({ req, res, operation, mainPart, responsePart }: {
     req: Request
@@ -1213,7 +1187,9 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
         this.wrapExpressMiddleware(this.fileReadMiddleware),
         express.static(path.resolve(__dirname, this.fileDir), { maxAge: this.maxFileCacheAge }),
       )
-      router.use('/static', (req, res) => res.status(404).send('NOT FOUND')) // If a file is not found in FileDir, send back 404 NOT FOUND
+      router.use('/static', (req, res) => {
+        res.status(404).send('NOT FOUND')
+      })
 
       router.post(
         '/fileupload',
@@ -1225,7 +1201,7 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
               ? await this.handleImageUpload(req.file!)
               : await this.handleFileUpload(req.file!)
 
-            return roboFile
+            res.send(roboFile)
           }
           catch (err) {
             res.status(500).send(err)
@@ -1399,6 +1375,28 @@ export default class Robogo<Namespace extends string, AccessGroup extends string
     })
 
     return router
+  }
+
+  public addMiddleware(modelName: string, operation: OperationType, timing: 'before', middlewareFunction: MiddlewareBeforeFunction): void
+  public addMiddleware(modelName: string, operation: OperationType, timing: 'after', middlewareFunction: MiddlewareAfterFunction): void
+  public addMiddleware(modelName: string, operation: OperationType, timing: MiddlewareTiming, middlewareFunction: MiddlewareAfterFunction | MiddlewareBeforeFunction) {
+    const errorOccurrence = `adding the custom middleware '${modelName} -> ${operation} -> ${timing}'`
+
+    if (!this.middlewares[modelName]) {
+      this.logger.logMissingModel(modelName, errorOccurrence)
+      throw new Error(`MISSING MODEL: ${modelName}`)
+    }
+    if (!this.operations.includes(operation)) {
+      this.logger.logUnknownOperation(operation, errorOccurrence)
+      throw new Error(`Middleware: Operation should be one of: ${this.operations}`)
+    }
+    if (!this.timings.includes(timing)) {
+      this.logger.logUnknownTiming(timing, errorOccurrence)
+      throw new Error(`Middleware: Timing should be one of: ${this.timings}`)
+    }
+
+    // @ts-expect-error - The two function overloads are ensuring the correct types
+    this.middlewares[modelName][operation][timing] = middlewareFunction as MiddlewareAfterFunction
   }
 }
 
