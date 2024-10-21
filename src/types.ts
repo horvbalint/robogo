@@ -34,11 +34,12 @@ export interface WithAccessGroups<AccessGroup extends string> {
 
 export type FieldProps = any
 
+export type FieldType = 'String' | 'Number' | 'Boolean' | 'Date' | 'Object'
 export interface RoboField<AccessGroup extends string = string> extends WithAccessGroups<AccessGroup> {
   /** The key of the field */
   key: string
   /** The type of the field */
-  type: string
+  type: FieldType
   /** The name of the field */
   name?: string
   /** Indiciates whether the field is an array or not */
