@@ -56,13 +56,20 @@ export class TSGenerator<AccessGroup extends string> {
     switch (field.type) {
       case 'String': return 'string'
       case 'Boolean': return 'boolean'
-      case 'Date': return 'Date'
+      case 'Date': return 'Date | string'
       case 'Number': return 'number'
       case 'Object': {
-        if (field.ref)
-          return `${field.ref}`
-        else
+        if (field.ref) {
+          if (field.autopopulate) {
+            if (field.autopopulate === true || field.autopopulate?.maxDepth !== 0)
+              return `${field.ref}`
+            else
+              return `${field.ref}['_id']`
+          }
+        }
+        else {
           return this.generateTSDefinitionForObject(field.subfields!, depth + 1)
+        }
       }
     }
 
