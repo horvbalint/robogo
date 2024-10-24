@@ -28,7 +28,7 @@
   "main": "dist/index.js",
   "scripts": {
     "postinstall": "pnpm prepare",
-    "prepare": "mtgen ./src/schemas/*.ts -o ./src/mongooseTypes.ts",
+    "prepare": "pnpm mtgen ./src/schemas/*.ts -o ./src/mongooseTypes.ts",
     "build": "tsc --declaration"
   },
   "dependencies": {
