@@ -1,6 +1,7 @@
 import type { Request, RequestHandler, Response, Router } from 'express'
 import type mongoose from 'mongoose'
 import type { RoboFile } from './mongooseTypes.js'
+import type { OutputType } from './tsGenerator.js'
 import type { Accesses, AccessType, FieldType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, OperationType, Optional, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types.js'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -9,6 +10,7 @@ import { glob } from 'glob'
 import multer, { Field } from 'multer'
 import sharp from 'sharp'
 import RoboFileModel from './schemas/roboFile.js'
+import { TSGenerator } from './tsGenerator.js'
 import Logger from './utils/logger.js'
 import MinimalSetCollection from './utils/minimalSetCollection.js'
 
@@ -1404,52 +1406,11 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
     this.middlewares[modelName][operation][timing] = middlewareFunction
   }
 
-  async generateTSDefintions({ type, output }: { type: 'backend' | 'frontend', output: string }) {
-    const interfaces = Object.entries(this.schemas).map(([modelName, schema]) => this.generateTSDefinitionForSchema(modelName, schema))
-    const definitions = interfaces.join('\n\n')
+  async generateTSDefintions({ type, output }: { type: OutputType, output: string }) {
+    const generator = new TSGenerator(this.schemas, type)
+    const definitions = generator.generate()
 
     await fs.promises.writeFile(output, definitions)
-  }
-
-  private generateTSDefinitionForSchema(modelName: string, schema: RoboField<AccessGroup>[]): string {
-    const fields = this.generateTSDefinitionForObject(schema, 1)
-    return `interface ${modelName} ${fields}`
-  }
-
-  private generateTSDefinitionForObject(fields: RoboField<AccessGroup>[], depth: number): string {
-    const lines = ['{']
-
-    for (const field of fields) {
-      const type = this.getTSType(field, depth)
-      const optional = !field.required ? '?' : ''
-      const indentation = getIndentation(depth)
-      lines.push(`${indentation}${field.key}${optional}: ${type}`)
-    }
-
-    const indentation = getIndentation(depth - 1)
-    lines.push(`${indentation}}`)
-
-    return lines.join('\n')
-  }
-
-  private getTSType(field: RoboField<AccessGroup>, depth: number, arrayItem = false): string {
-    if (field.isArray && !arrayItem)
-      return `Array<${this.getTSType(field, depth, true)}>`
-
-    switch (field.type) {
-      case 'String': return 'string'
-      case 'Boolean': return 'boolean'
-      case 'Date': return 'Date'
-      case 'Number': return 'number'
-      case 'Object': {
-        if (field.ref)
-          return `${field.ref}`
-        else
-          return this.generateTSDefinitionForObject(field.subfields!, depth + 1)
-      }
-    }
-
-    throw new Error(`Robogo Error: Encountered unknown type '${field.type}' while generating typescript definitions.`)
   }
 }
 
@@ -1465,8 +1426,4 @@ async function asyncFilter<T>(array: T[], predicate: (item: T) => Promise<boolea
   const results = await Promise.all(promises)
 
   return array.filter((item, index) => results[index])
-}
-
-function getIndentation(depth: number) {
-  return '  '.repeat(depth)
 }
