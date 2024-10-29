@@ -7,9 +7,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import express from 'express'
 import { glob } from 'glob'
-import multer, { Field } from 'multer'
+import multer from 'multer'
 import sharp from 'sharp'
-import RoboFileModel from './schemas/roboFile.js'
+import RoboFileSchema from './schemas/roboFile.js'
 import { TSGenerator } from './tsGenerator.js'
 import Logger from './utils/logger.js'
 import MinimalSetCollection from './utils/minimalSetCollection.js'
@@ -114,6 +114,8 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
     showLogs = true,
   }: RobogoConfig<Namespace, AccessGroup>) {
     this.mongooseConnection = mongooseConnection
+    this.registerRoboFileModel()
+
     this.schemaPathGlob = schemaPathGlob
     this.servicePathGlob = servicePathGlob
     this.fileDir = fileDir
@@ -147,8 +149,12 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
     }
   }
 
+  registerRoboFileModel() {
+    this.mongooseConnection.model('RoboFile', RoboFileSchema)
+  }
+
   async init() {
-    const roboModel = this.generateModel(RoboFileModel as mongoose.Model<unknown>)
+    const roboModel = this.generateModel(this.mongooseConnection.model<RoboFile>('RoboFile') as mongoose.Model<unknown>)
     this.roboFileShema = this.generateSchema(roboModel)
 
     await this.processSchemas()
@@ -557,7 +563,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
     if (this.createThumbnail)
       roboFileData.thumbnailPath = `${file.filename}_thumbnail.${extension}`
 
-    return RoboFileModel.create(roboFileData)
+    return this.mongooseConnection.model<RoboFile>('RoboFile').create(roboFileData)
   }
 
   /**
@@ -592,7 +598,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
 
     await fs.promises.rename(multerPath, `${multerPath}.${extension}`)
 
-    return RoboFileModel.create({
+    return this.mongooseConnection.model<RoboFile>('RoboFile').create({
       name: file.originalname,
       path: filePath,
       size: file.size,
@@ -1221,7 +1227,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
         this.wrapExpressMiddleware(this.fileUploadMiddleware),
         async (req, res) => {
           try {
-            const roboFile = await RoboFileModel.findOne({ _id: req.params.id }).lean<RoboFile>()
+            const roboFile = await this.mongooseConnection.model<RoboFile>('RoboFile').findOne({ _id: req.params.id }).lean<RoboFile>()
             if (!roboFile)
               throw new Error('UNKNOWN FILE')
 
@@ -1249,7 +1255,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
             if (roboFile.thumbnailPath)
               copy.thumbnailPath = roboFile.thumbnailPath.replace('.', '_copy.')
 
-            const file = await RoboFileModel.create(roboFile)
+            const file = await this.mongooseConnection.model<RoboFile>('RoboFile').create(roboFile)
             res.send(file)
           }
           catch (err) {
@@ -1263,7 +1269,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
         this.wrapExpressMiddleware(this.fileDeleteMiddleware),
         async (req, res) => {
           try {
-            const file = await RoboFileModel.findOne({ _id: req.params.id }).lean()
+            const file = await this.mongooseConnection.model<RoboFile>('RoboFile').findOne({ _id: req.params.id }).lean()
             if (!file)
               throw new Error('UNKNOWN FILE')
 
@@ -1285,7 +1291,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
                 await fs.promises.unlink(thumbnailPath)
             }
 
-            await RoboFileModel.deleteOne({ _id: file._id })
+            await this.mongooseConnection.model<RoboFile>('RoboFile').deleteOne({ _id: file._id })
             res.send()
           }
           catch (err) {
@@ -1379,6 +1385,10 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
       catch (err) {
         res.status(500).send(err)
       }
+    })
+
+    router.use((req, res) => {
+      res.status(404).send()
     })
 
     return router

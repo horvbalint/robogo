@@ -1,6 +1,6 @@
 import mongoose from 'mongoose'
 
-const RoboFileSchema = new mongoose.Schema({
+export default new mongoose.Schema({
   name: { type: String, name: 'File name', description: 'Name of the saved file', required: true, marked: true },
   path: { type: String, name: 'File path', description: 'Path of the saved file', required: true },
   size: { type: Number, name: 'File size', description: 'Sized of the saved file', required: true },
@@ -10,5 +10,3 @@ const RoboFileSchema = new mongoose.Schema({
   thumbnailPath: { type: String, name: 'Thumbnail path', description: 'Path of the saved thumbnail', default: null },
   uploadDate: { type: Date, name: 'Upload date', description: 'The date when the file was uploaded', default: () => new Date() },
 }, { selectPopulatedPaths: false })
-
-export default mongoose.model('RoboFile', RoboFileSchema)
