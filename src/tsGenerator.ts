@@ -23,7 +23,7 @@ export class TSGenerator<AccessGroup extends string> {
 
   private generateTSDefinitionForSchema(modelName: string, schema: RoboField<AccessGroup>[]): string {
     const fields = this.generateTSDefinitionForObject(schema, 1)
-    return `export interface ${modelName} ${fields}`
+    return `export type ${modelName} = ${fields}`
   }
 
   private generateTSDefinitionForObject(fields: RoboField<AccessGroup>[], depth: number): string {
