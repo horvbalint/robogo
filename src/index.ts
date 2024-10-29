@@ -1340,7 +1340,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
         })
     })
 
-    router.get('/fields/:model', (req, res) => {
+    router.get('/schema/:model', (req, res) => {
       this.CRUDSRoute({
         req,
         res,

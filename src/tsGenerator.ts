@@ -29,12 +29,11 @@ export class TSGenerator<AccessGroup extends string> {
   private generateTSDefinitionForObject(fields: RoboField<AccessGroup>[], depth: number): string {
     const lines = ['{']
 
-    if (depth === 1) {
-      if (this.type === 'frontend')
-        lines.push(`${getIndentation(depth)}_id: string`)
-      else
-        lines.push(`${getIndentation(depth)}_id: mongoose.Types.ObjectId`)
-    }
+    const optional = depth > 1 ? '?' : ''
+    if (this.type === 'frontend')
+      lines.push(`${getIndentation(depth)}_id${optional}: string`)
+    else
+      lines.push(`${getIndentation(depth)}_id${optional}: mongoose.Types.ObjectId`)
 
     for (const field of fields) {
       const type = this.getTSType(field, depth)
