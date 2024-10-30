@@ -328,7 +328,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
       roboField.isArray = true
 
     // these keys are only added if specified
-    const optionKeys = ['required', 'name', 'description', 'enum', 'autopopulate', 'default', 'readGroups', 'writeGroups'] as const
+    const optionKeys = ['required', 'name', 'description', 'enum', 'autopopulate', 'default', 'readGroups', 'writeGroups', 'marked'] as const
     for (const key of optionKeys) {
       if (type.options.hasOwnProperty(key))
         roboField[key] = type.options[key]

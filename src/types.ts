@@ -46,6 +46,8 @@ export interface RoboField<AccessGroup extends string = string> extends WithAcce
   isArray?: boolean
   /** Indiciates whether the field is required */
   required?: boolean
+  /** Can be used to mark the field as special */
+  marked?: boolean
   /** A description provided to the field */
   description?: string
   /** Arbitrary data for the field */
