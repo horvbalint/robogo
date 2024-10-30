@@ -1,8 +1,7 @@
 import type { Request, RequestHandler, Response, Router } from 'express'
 import type mongoose from 'mongoose'
-import type { RoboFile } from './mongooseTypes.js'
 import type { OutputType } from './tsGenerator.js'
-import type { Accesses, AccessType, FieldType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, OperationType, Optional, RoboField, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types.js'
+import type { Accesses, AccessType, FieldType, FileMiddlewareFunction, FilterObject, GuardFunction, GuardResults, MaybePromise, MiddlewareAfterFunction, MiddlewareBeforeFunction, MiddlewareTiming, Model, MongooseDocument, OperationType, Optional, RoboField, RoboFile, ServiceFunction, SortObject, SortValue, WithAccessGroups } from './types.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import express from 'express'
@@ -13,8 +12,6 @@ import RoboFileSchema from './schemas/roboFile.js'
 import { TSGenerator } from './tsGenerator.js'
 import Logger from './utils/logger.js'
 import MinimalSetCollection from './utils/minimalSetCollection.js'
-
-export * from './mongooseTypes.js'
 
 class MiddlewareError extends Error {
   constructor(public type: MiddlewareTiming, err: Error) {
@@ -1422,7 +1419,7 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
   }
 
   async generateTSDefintions({ type, output }: { type: OutputType, output: string }) {
-    const generator = new TSGenerator(this.schemas, type)
+    const generator = new TSGenerator({ ...this.schemas, RoboFile: this.roboFileShema }, type)
     const definitions = generator.generate()
 
     await fs.promises.writeFile(output, definitions)

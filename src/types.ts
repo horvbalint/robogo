@@ -95,3 +95,15 @@ export interface Accesses {
   }
   fields: Record<string, Partial<Record<AccessType, true>>>
 }
+
+export interface RoboFile {
+  _id: mongoose.Types.ObjectId
+  name: string
+  path: string
+  size: number
+  type?: string
+  extension: string
+  isImage?: boolean
+  thumbnailPath?: string
+  uploadDate?: Date | string
+}

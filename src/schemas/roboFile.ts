@@ -1,6 +1,7 @@
+import type { RoboFile } from '../types'
 import mongoose from 'mongoose'
 
-export default new mongoose.Schema({
+export default new mongoose.Schema<RoboFile>({
   name: { type: String, name: 'File name', description: 'Name of the saved file', required: true, marked: true },
   path: { type: String, name: 'File path', description: 'Path of the saved file', required: true },
   size: { type: Number, name: 'File size', description: 'Sized of the saved file', required: true },
