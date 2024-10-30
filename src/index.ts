@@ -1105,12 +1105,17 @@ export default class Robogo<Namespace extends string = string, AccessGroup exten
             this.processSort(req),
           ])
 
-          return this.mongooseConnection.model(req.params.model)
+          const query = this.mongooseConnection.model(req.params.model)
             .find(filter, req.query.projection)
             .sort(sort)
-            .skip(Number(req.query.skip) || 0)
-            .limit(Number(req.query.limit) || Infinity)
-            .lean({ autopopulate: true, virtuals: true, getters: true })
+
+          if (req.query.skip)
+            query.skip(Number(req.query.skip))
+
+          if (req.query.limit)
+            query.limit(Number(req.query.limit))
+
+          return query.lean({ autopopulate: true, virtuals: true, getters: true })
         },
         responsePart: async (results) => {
           if (req.checkReadAccess)
