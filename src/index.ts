@@ -13,6 +13,8 @@ import { TSGenerator } from './tsGenerator.js'
 import Logger from './utils/logger.js'
 import MinimalSetCollection from './utils/minimalSetCollection.js'
 
+export type * from './types.js'
+
 class MiddlewareError extends Error {
   constructor(public type: MiddlewareTiming, err: Error) {
     super(type, { cause: err })
