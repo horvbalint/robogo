@@ -17,7 +17,7 @@ export type * from './types.js'
 
 class MiddlewareError extends Error {
   constructor(public type: MiddlewareTiming, err: Error) {
-    super(type, { cause: err })
+    super(err.message, { cause: err })
   }
 }
 

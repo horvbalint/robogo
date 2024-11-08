@@ -1,8 +1,8 @@
-import {GuardFunction, SortValue} from './types'
+import type { GuardFunction, SortValue } from './types'
 
 declare module 'mongoose' {
   interface SchemaOptions {
-    name?: string 
+    name?: string
     namespaces?: string[]
     props?: Record<string, unknown>
     readGuards?: GuardFunction[]
@@ -21,7 +21,8 @@ declare module 'mongoose' {
 declare global {
   // Without this TS's Arra.isArray() does not work for readonly arrays :)))
   interface ArrayConstructor {
-    isArray(arg: unknown): arg is unknown[] | readonly unknown[];
+    // eslint-disable-next-line ts/method-signature-style
+    isArray(arg: unknown): arg is unknown[] | readonly unknown[]
   }
 
   namespace Express {
@@ -32,6 +33,5 @@ declare global {
     }
   }
 }
-
 
 export {}
