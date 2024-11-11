@@ -48,6 +48,8 @@ export interface RoboField<AccessGroup extends string = string> extends WithAcce
   required?: boolean
   /** Can be used to mark the field as special */
   marked?: boolean
+  /** Marker field to easily mark hidden fields */
+  hidden?: boolean
   /** A description provided to the field */
   description?: string
   /** Arbitrary data for the field */
