@@ -53,10 +53,20 @@ export class TSGenerator<AccessGroup extends string> {
       return `Array<${this.getTSType(field, depth, true)}>`
 
     switch (field.type) {
-      case 'String': return 'string'
+      case 'String': {
+        if (field.enum)
+          return field.enum.map(option => `'${option}'`).join(' | ')
+        else
+          return 'string'
+      }
       case 'Boolean': return 'boolean'
       case 'Date': return 'Date | string'
-      case 'Number': return 'number'
+      case 'Number': {
+        if (field.enum)
+          return field.enum.join(' | ')
+        else
+          return 'number'
+      }
       case 'Object': {
         if (field.ref) {
           if (field.autopopulate && (field.autopopulate === true || field.autopopulate?.maxDepth !== 0))
